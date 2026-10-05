@@ -17,6 +17,13 @@ llm:
 publicUrls:
   proxy: ""                  # https://<proxy-host> — shown in the panel's "client connection" card
 
+# Private git repos for Code Graph. Repos under urlPrefix are cloned with this read-only
+# credential, sent as an HTTP header (never stored in the repo URL). Empty token = public only.
+gitAuth:
+  urlPrefix: https://bitbucket.org/weaversoft/
+  username: x-token-auth     # Bitbucket repository / project / workspace access tokens
+  token: ""                  # sensitive — supplied by the pipeline, never committed
+
 storage:
   className: mayastor-1rep-wait
   coreSize: 2Gi

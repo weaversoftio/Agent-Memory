@@ -12,6 +12,7 @@
 
 import simpleGit, { CleanOptions, ResetMode } from "simple-git";
 import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
+import { gitAuthConfig, gitCredentialFromEnv, type GitHttpCredential } from "./git-auth.js";
 
 /**
  * 内网 / 环回 / link-local 地址黑名单（标准网段）：
@@ -42,6 +43,11 @@ export interface GitSourceFetcherOptions {
    * 默认读环境变量 KNOWLEDGE_SSRF_CHECK（默认开启）；显式传入时优先于环境变量。
    */
   ssrfCheck?: boolean;
+  /**
+   * Server-side credential for private repos under a URL prefix.
+   * Defaults to KNOWLEDGE_GIT_AUTH_* env (see git-auth.ts); pass null to disable.
+   */
+  credential?: GitHttpCredential | null;
 }
 
 export class GitSourceFetcher implements ISourceFetcher {
@@ -49,21 +55,28 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   /** SSRF 私网黑名单校验开关（https-only 协议校验始终生效，不受此开关影响）。 */
   private readonly ssrfCheck: boolean;
+  private readonly credential: GitHttpCredential | null;
 
   constructor(opts?: GitSourceFetcherOptions) {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
+    this.credential = opts?.credential !== undefined ? opts.credential : gitCredentialFromEnv();
   }
 
   validate(sourceUrl: string): void {
-    // 第一版：仅支持 public HTTPS 仓库（SSH / 私有仓库鉴权见文档 005）。
+    // HTTPS only; private repos authenticate via the server-side credential (git-auth.ts).
     if (!sourceUrl.startsWith("https://")) {
-      throw new Error(
-        "first version only supports public HTTPS repos; SSH/private repo support coming soon",
-      );
+      throw new Error("only HTTPS repo URLs are supported (SSH is not)");
     }
     const host = this.extractHost(sourceUrl);
     if (!host) {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
+    }
+    // A password/token in the URL would be stored and shown with the repo; private repos
+    // must use the server-side credential instead.
+    if (this.hasEmbeddedPassword(sourceUrl)) {
+      throw new Error(
+        "repo_url must not contain a password or token; private repos use the server-side git credential",
+      );
     }
     // R2: SSRF 防护 —— 禁止指向内网 / 环回地址（可经 KNOWLEDGE_SSRF_CHECK=off 关闭）。
     if (this.ssrfCheck && this.isPrivateAddress(host)) {
@@ -76,7 +89,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
     // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
-    await simpleGit().clone(sourceUrl, localPath, {
+    await simpleGit({ config: gitAuthConfig(sourceUrl, this.credential) }).clone(sourceUrl, localPath, {
       "--depth": 1,
       "--branch": branch,
     });
@@ -86,7 +99,7 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
     this.validate(sourceUrl);
-    const git = simpleGit(localPath);
+    const git = simpleGit({ baseDir: localPath, config: gitAuthConfig(sourceUrl, this.credential) });
     await git.fetch("origin", branch, { "--depth": 1 });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);
     // Bug 修复（方案 A）：clean 排除 .codegraph/，否则会删掉 codegraph 的索引库，
@@ -111,6 +124,14 @@ export class GitSourceFetcher implements ISourceFetcher {
       return new URL(url).hostname;
     } catch {
       return "";
+    }
+  }
+
+  private hasEmbeddedPassword(url: string): boolean {
+    try {
+      return new URL(url).password !== "";
+    } catch {
+      return false;
     }
   }
 

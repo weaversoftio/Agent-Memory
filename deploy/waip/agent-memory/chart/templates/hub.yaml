@@ -72,6 +72,18 @@ spec:
                   key: llm-api-key
             - name: KNOWLEDGE_LLM_BINDING_SYNC
               value: "0"
+            {{- if .Values.gitAuth.token }}
+            # Private repos for Code Graph: one read-only credential for every repo under the prefix.
+            - name: KNOWLEDGE_GIT_AUTH_URL_PREFIX
+              value: {{ .Values.gitAuth.urlPrefix | quote }}
+            - name: KNOWLEDGE_GIT_AUTH_USERNAME
+              value: {{ .Values.gitAuth.username | quote }}
+            - name: KNOWLEDGE_GIT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: git-auth-token
+            {{- end }}
             - name: HOME
               value: /tmp
           readinessProbe:
