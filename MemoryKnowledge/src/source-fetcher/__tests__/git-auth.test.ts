@@ -24,8 +24,21 @@ describe("gitCredentialFromEnv", () => {
     expect(cred).toEqual(CRED);
   });
 
-  it("throws when only some of the variables are set", () => {
-    expect(() => gitCredentialFromEnv({ KNOWLEDGE_GIT_AUTH_TOKEN: "tok123" })).toThrow(/must be set together/);
+  it("is off when the token is empty, even with prefix and username pre-filled", () => {
+    expect(
+      gitCredentialFromEnv({
+        KNOWLEDGE_GIT_AUTH_URL_PREFIX: "https://bitbucket.org/weaversoft/",
+        KNOWLEDGE_GIT_AUTH_USERNAME: "x-token-auth",
+        KNOWLEDGE_GIT_AUTH_TOKEN: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("throws when a token is set without prefix or username", () => {
+    expect(() => gitCredentialFromEnv({ KNOWLEDGE_GIT_AUTH_TOKEN: "tok123" })).toThrow(/are required too/);
+    expect(() =>
+      gitCredentialFromEnv({ KNOWLEDGE_GIT_AUTH_TOKEN: "tok123", KNOWLEDGE_GIT_AUTH_URL_PREFIX: "https://bitbucket.org/x/" }),
+    ).toThrow(/are required too/);
   });
 
   it("rejects non-https prefixes and prefixes with embedded credentials", () => {

@@ -35,17 +35,18 @@ function normalisePrefix(raw: string): string | null {
 }
 
 /**
- * Read the credential from env. Returns null when not configured; throws when it is
- * configured but unusable, so a typo fails at startup instead of on the first clone.
+ * Read the credential from env. The token is the on/off switch: without it the feature is
+ * off (public repos only), even if a prefix/username is pre-filled. With a token, a missing
+ * or invalid prefix/username throws, so a typo fails at startup instead of on the first clone.
  */
 export function gitCredentialFromEnv(env: NodeJS.ProcessEnv = process.env): GitHttpCredential | null {
   const prefix = env.KNOWLEDGE_GIT_AUTH_URL_PREFIX?.trim() ?? "";
   const username = env.KNOWLEDGE_GIT_AUTH_USERNAME?.trim() ?? "";
   const token = env.KNOWLEDGE_GIT_AUTH_TOKEN?.trim() ?? "";
-  if (!prefix && !token) return null;
-  if (!prefix || !username || !token) {
+  if (!token) return null;
+  if (!prefix || !username) {
     throw new Error(
-      "KNOWLEDGE_GIT_AUTH_URL_PREFIX, KNOWLEDGE_GIT_AUTH_USERNAME and KNOWLEDGE_GIT_AUTH_TOKEN must be set together",
+      "KNOWLEDGE_GIT_AUTH_TOKEN is set, so KNOWLEDGE_GIT_AUTH_URL_PREFIX and KNOWLEDGE_GIT_AUTH_USERNAME are required too",
     );
   }
   const urlPrefix = normalisePrefix(prefix);
