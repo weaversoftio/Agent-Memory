@@ -17,7 +17,7 @@ import { SKIP_LABEL, MORE_LABEL, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./f
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+const SKIP_RE = /\bskip\b/i;
 export const BYPASS_MARKER = "__bypass__" as const;
 export const MORE_MARKER = "__more__" as const;
 
@@ -64,11 +64,11 @@ export function extractAssetConfirm(content: string): boolean | null {
 
   if (allowLoosePattern) {
     // 宽松"是"匹配：必须以"是"或"确认"开头，避免"是否"、"不是"等误匹配
-    if (/^(?:是|确认)[，,\s]/i.test(answerOnly.trim())) {
+    if (/^(?:yes|confirm)[,\s]/i.test(answerOnly.trim())) {
       return true;
     }
     // 宽松"否"匹配
-    if (/^(?:否|不[，,\s]|跳过|skip)/i.test(answerOnly.trim())) {
+    if (/^(?:no[,\s]|skip)/i.test(answerOnly.trim())) {
       return false;
     }
   }
@@ -401,13 +401,13 @@ export function extractFromOptionText(
 // ── Structured / LLM fallback ──────────────────────────────────────────────────
 
 export function extractStructured(content: string): SessionInitData | null {
-  const agentMatch = content.match(/agent\s*[:：=]\s*(\S+)/i);
+  const agentMatch = content.match(/agent\s*[:=]\s*(\S+)/i);
   if (!agentMatch) return null;
   const agent_id = agentMatch[1].trim();
   if (!agent_id) return null;
 
   let task_id: string | undefined;
-  const taskMatch = content.match(/task\s*[:：=]\s*(\S+)/i);
+  const taskMatch = content.match(/task\s*[:=]\s*(\S+)/i);
   if (taskMatch && taskMatch[1] !== "0" && taskMatch[1].toLowerCase() !== "skip") {
     task_id = taskMatch[1].trim();
   }

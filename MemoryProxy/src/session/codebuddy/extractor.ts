@@ -19,7 +19,7 @@ import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./for
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+const SKIP_RE = /\bskip\b/i;
 export const BYPASS_MARKER = "__bypass__" as const;
 
 // ── opencode tool-result 剥壳 ───────────────────────────────────────────────
@@ -64,10 +64,10 @@ export function extractAssetConfirm(content: string): boolean | null {
   const xml = parseQuestionAnswerXml(content);
   const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
 
-  if (answer.includes(ASSET_CONFIRM_YES) || /是.*关联|关联.*是|确认.*关联/i.test(answer)) {
+  if (answer.includes(ASSET_CONFIRM_YES) || /^\s*(?:yes|confirm)\b/i.test(answer)) {
     return true;
   }
-  if (answer.includes(ASSET_CONFIRM_NO) || /否.*不关联|不关联.*否|本次不关联/i.test(answer)) {
+  if (answer.includes(ASSET_CONFIRM_NO) || /^\s*no\b|not this time/i.test(answer)) {
     return false;
   }
   return null;
@@ -389,13 +389,13 @@ export function extractTaskOnly(
 // ── Structured / LLM fallback ──────────────────────────────────────────────────
 
 export function extractStructured(content: string): SessionInitData | null {
-  const agentMatch = content.match(/agent\s*[:：=]\s*(\S+)/i);
+  const agentMatch = content.match(/agent\s*[:=]\s*(\S+)/i);
   if (!agentMatch) return null;
   const agent_id = agentMatch[1].trim();
   if (!agent_id) return null;
 
   let task_id: string | undefined;
-  const taskMatch = content.match(/task\s*[:：=]\s*(\S+)/i);
+  const taskMatch = content.match(/task\s*[:=]\s*(\S+)/i);
   if (taskMatch && taskMatch[1] !== "0" && taskMatch[1].toLowerCase() !== "skip") {
     task_id = taskMatch[1].trim();
   }

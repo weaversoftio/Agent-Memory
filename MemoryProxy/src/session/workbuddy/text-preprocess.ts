@@ -95,19 +95,19 @@ export interface PreprocessOptions {
 // ── 关键字正则 ─────────────────────────────────────────────────────────────
 
 /** next / 下一页 / 下页 / 下一步 —— 触发 MORE 翻页。 */
-const NEXT_RE = /^\s*(next|下一?页|下一?步|n)\s*$/i;
+const NEXT_RE = /^\s*(next|n)\s*$/i;
 
 /** prev / 上一页 / 上页 / 上一步 —— 触发 paginate-prev。 */
-const PREV_RE = /^\s*(prev|previous|上一?页|上一?步|p)\s*$/i;
+const PREV_RE = /^\s*(prev|previous|p)\s*$/i;
 
 /** 纯数字 —— 需要根据当前页切片查表翻译成对应 label。 */
 const DIGIT_RE = /^\s*(\d+)\s*$/;
 
 /** yes / y / 是 —— 仅在 asset_confirm 阶段翻译成 ASSET_CONFIRM_YES label。 */
-const YES_RE = /^\s*(yes|y|是)\s*$/i;
+const YES_RE = /^\s*(yes|y)\s*$/i;
 
 /** no / n / 否 —— 仅在 asset_confirm 阶段翻译成 ASSET_CONFIRM_NO label。 */
-const NO_RE = /^\s*(no|n|否)\s*$/i;
+const NO_RE = /^\s*(no|n)\s*$/i;
 
 // ── 主函数 ─────────────────────────────────────────────────────────────────
 
@@ -155,15 +155,15 @@ export function preprocessTextModeInput(
     if (YES_RE.test(text)) {
       return {
         action: "translate",
-        translated: "是，关联团队资产",
-        reason: `yes-keyword → "是，关联团队资产"`,
+        translated: "Yes, link team assets",
+        reason: `yes-keyword → "Yes, link team assets"`,
       };
     }
     if (NO_RE.test(text)) {
       return {
         action: "translate",
-        translated: "否，本次不关联",
-        reason: `no-keyword → "否，本次不关联"`,
+        translated: "No, not this time",
+        reason: `no-keyword → "No, not this time"`,
       };
     }
   }
@@ -240,8 +240,8 @@ function resolveNumberToLabel(
     case "asset_confirm": {
       // asset_confirm 只有 2 个固定选项，不分页。extractAssetConfirm 认
       // "是" / "否" / "关联"等关键字，直接返回精确字面串。
-      if (n === 1) return "是，关联团队资产";
-      if (n === 2) return "否，本次不关联";
+      if (n === 1) return "Yes, link team assets";
+      if (n === 2) return "No, not this time";
       return null;
     }
 

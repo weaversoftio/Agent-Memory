@@ -34,24 +34,24 @@ export const TOOLCALL_PREFIX = "call_codex_session_init_";
  */
 export const TOOLCALL_ID_PREFIX = "fc_codex_session_init_";
 
-export const TEAM_FORM_TITLE = "会话初始化 — 选择 Team";
-export const AGENT_TASK_FORM_TITLE = "会话初始化 — 选择 Agent 与任务";
-export const RETRY_FORM_TITLE = "未能识别选择，请重新选择";
+export const TEAM_FORM_TITLE = "Session setup — choose a Team";
+export const AGENT_TASK_FORM_TITLE = "Session setup — choose Agent and Task";
+export const RETRY_FORM_TITLE = "Selection not recognised, please choose again";
 
-export const ASSET_CONFIRM_YES = "是，关联团队资产";
-export const ASSET_CONFIRM_NO = "否，本次不关联";
-export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
+export const ASSET_CONFIRM_YES = "Yes, link team assets";
+export const ASSET_CONFIRM_NO = "No, not this time";
+export const ASSET_CONFIRM_FORM_TITLE = "Session setup — link team assets?";
 
 /**
- * codex 分页 "更多..." 选项的稳定标记（写在 option.label 里，用户点了会
+ * codex 分页 "More..." 选项的稳定标记（写在 option.label 里，用户点了会
  * 原样回到 codex handler，我们据此拦截 → pageIndex++ 重发下一页 form）。
  *
  * MARKER 是内部识别用的稳定字符串（对齐 CC MORE_MARKER 命名），LABEL 是
- * 面向用户的可读中文（"更多..."）。extract 时按 LABEL 子串匹配即可，
+ * 面向用户的可读中文（"More..."）。extract 时按 LABEL 子串匹配即可，
  * MARKER 本身不进 label（避免"__..."字符污染 UI 显示）。
  */
 export const CODEX_MORE_MARKER = "__codex_more_marker__" as const;
-export const CODEX_MORE_LABEL = "更多...";
+export const CODEX_MORE_LABEL = "More...";
 
 /**
  * 客户端 Default 模式下 gate 拦截的前缀字符串。
@@ -64,7 +64,7 @@ export const DEFAULT_GATE_PREFIX = "request_user_input is unavailable in";
  * Codex 的 request_user_input 在 Plan 模式下展示 questions + options 给用户；
  * 跳过入口为「否，本次不关联」按钮。文案与 claude-code/workbuddy/codebuddy/dsh 五端统一。
  */
-const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
+const SKIP_HINT = ' (Pick the closest option; typing your own answer is not supported yet. If you choose No, no team assets are injected into this session.)';
 
 /** Returns true if the given string contains any codex form title marker. */
 export function containsFormTitle(s: string): boolean {
@@ -124,7 +124,7 @@ export interface FormData {
    *   - taskPage:  task_select stage（及 legacy agent_task 的 task 问题）
    *
    * 缺省全部按 0 处理。codex handler 从 sessionStore 的 codexPageIndex
-   * 字段读出并传下来；用户答 "更多..." 时 handler 拦截并 +1 重发。
+   * 字段读出并传下来；用户答 "More..." 时 handler 拦截并 +1 重发。
    */
   teamPage?: number;
   agentPage?: number;
@@ -144,7 +144,7 @@ export interface FormData {
  * 答案；CB 状态机每次只关心最新一步。
  *
  * `output` 可能是：
- *   - 纯字符串答案：`"是，关联团队资产"`
+ *   - 纯字符串答案：`"Yes, link team assets"`
  *   - JSON 字符串 `{"answers":{"q1":"是"}}`（不同版本 codex 客户端可能不同）
  *   - JSON 字符串 `{"question":"...","answer":"..."}` 或数组
  * 兜底策略：能解析出结构化 answer 值就拼接返回，否则直接用原始字符串。
@@ -214,8 +214,8 @@ function extractAnswerText(raw: string): string {
  *
  * 兼容多种 output 格式：
  *   - 纯字符串（单题）
- *   - JSON: `{"answers":{"team_select":"更多..."}}`
- *   - JSON: `{"answers":{"agent_select":"agent-1","task_select":"更多..."}}`
+ *   - JSON: `{"answers":{"team_select":"More..."}}`
+ *   - JSON: `{"answers":{"agent_select":"agent-1","task_select":"More..."}}`
  *   - JSON: multi_question_result envelope
  *
  * 不解析的格式退化为"只按纯字符串检查 CODEX_MORE_LABEL 子串"——
@@ -381,7 +381,7 @@ function clampHeader(s: string): string {
 
 /**
  * 分页构建 options：把 entries 按 codex 的 3-slot 上限切成多页，非末页尾部
- * 追加一个 "更多..." 选项供用户翻页；末页无 MORE，直接列出剩余。
+ * 追加一个 "More..." 选项供用户翻页；末页无 MORE，直接列出剩余。
  *
  * - entries.length <= 3 && 单页 → 直接原样
  * - 中间页：前 2 real + MORE（3 项，客户端"其他"槽独立）
@@ -395,14 +395,14 @@ function buildOptions(
 ): CodexOption[] {
   if (entries.length === 0) {
     return [
-      { label: "跳过", description: "本次不关联，直接开始对话" },
-      { label: "重试", description: "重新拉取列表再选" },
+      { label: "Skip", description: "Start the conversation without linking" },
+      { label: "Retry", description: "Reload the list and choose again" },
     ];
   }
   if (entries.length === 1) {
     return [
       entries[0]!,
-      { label: "跳过", description: "本次不关联，直接开始对话" },
+      { label: "Skip", description: "Start the conversation without linking" },
     ];
   }
 
@@ -418,18 +418,18 @@ function buildOptions(
   const morePageNo = safePage + 2; // human-facing (1-based, next page)
   const moreOption: CodexOption = {
     label: CODEX_MORE_LABEL,
-    description: `查看下一批候选（第 ${morePageNo}/${page.totalPages} 页，还剩 ${remaining} 个）`,
+    description: `Show the next batch (page ${morePageNo}/${page.totalPages}, ${remaining} more)`,
   };
   return [...slice, moreOption];
 }
 
 function pageSuffix(pageIndex: number, totalPages: number): string {
-  return totalPages > 1 ? `（第 ${pageIndex + 1}/${totalPages} 页）` : "";
+  return totalPages > 1 ? ` (page ${pageIndex + 1}/${totalPages})` : "";
 }
 
 function buildQuestions(data: FormData): CodexQuestion[] {
   const { teams, stage, selectedTeamId, retry } = data;
-  const retryHint = retry ? "（上次未识别，请重新选择）" : "";
+  const retryHint = retry ? " (last answer not recognised, please choose again)" : "";
   const teamPage = Math.max(0, data.teamPage ?? 0);
   const agentPage = Math.max(0, data.agentPage ?? 0);
   const taskPage = Math.max(0, data.taskPage ?? 0);
@@ -437,16 +437,16 @@ function buildQuestions(data: FormData): CodexQuestion[] {
   if (stage === "asset_confirm") {
     return [{
       id: "asset_confirm",
-      header: clampHeader("是否关联资产"),
-      question: `本次对话是否要关联团队资产（Skill / Memory / Agent / Task / Knowledge）？${retryHint}`,
+      header: clampHeader("Link assets?"),
+      question: `Link team assets (Skill / Memory / Agent / Task / Knowledge) to this conversation?${retryHint}`,
       options: [
         {
           label: ASSET_CONFIRM_YES,
-          description: "接下来会请你选择 Team、Agent、Task，选完后每轮对话会自动注入相关资产。",
+          description: "Next you choose a Team, Agent and Task; after that the relevant assets are injected into every turn.",
         },
         {
           label: ASSET_CONFIRM_NO,
-          description: "本次会话跳过团队资产，直接开始对话。",
+          description: "Start this conversation without team assets.",
         },
       ],
     }];
@@ -455,13 +455,13 @@ function buildQuestions(data: FormData): CodexQuestion[] {
   if (stage === "team") {
     const entries = teams.map((t) => ({
       label: `${t.team_name} (${t.team_id.slice(-8)})`,
-      description: `Team ID: ${t.team_id}${t.agents?.length ? `，含 ${t.agents.length} 个 Agent` : ""}`,
+      description: `Team ID: ${t.team_id}${t.agents?.length ? `, ${t.agents.length} Agents` : ""}`,
     }));
     const pageInfo = computeCodexPagination(entries.length, teamPage);
     return [{
       id: "team_select",
-      header: clampHeader("选 Team"),
-      question: `请选择本次会话所属的 Team${pageSuffix(teamPage, pageInfo.totalPages)}${retryHint}：`,
+      header: clampHeader("Team"),
+      question: `Which Team is this session for${pageSuffix(teamPage, pageInfo.totalPages)}?${retryHint}`,
       options: buildOptions(entries, teamPage),
     }];
   }
@@ -481,8 +481,8 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     const pageInfo = computeCodexPagination(entries.length, agentPage);
     questions.push({
       id: "agent_select",
-      header: clampHeader("选 Agent"),
-      question: `请选择「${team.team_name}」下要使用的 Agent${pageSuffix(agentPage, pageInfo.totalPages)}${retryHint}：`,
+      header: clampHeader("Agent"),
+      question: `Which Agent in "${team.team_name}" should be used${pageSuffix(agentPage, pageInfo.totalPages)}?${retryHint}`,
       options: buildOptions(entries, agentPage),
     });
   }
@@ -492,15 +492,15 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     const entries = team.tasks.map((t) => ({
       label: t.isDefault ? t.task_name : `${t.task_name} (${t.task_id.slice(-8)})`,
       description: t.isDefault
-        ? "该 Agent 的默认任务（推荐）"
+        ? "This Agent's default task (recommended)"
         : `Task ID: ${t.task_id}`,
     }));
     const pageInfo = computeCodexPagination(entries.length, taskPage);
     const opts = buildOptions(entries, taskPage);
     questions.push({
       id: "task_select",
-      header: clampHeader("选 Task"),
-      question: `请选择「${team.team_name}」下关联的任务${pageSuffix(taskPage, pageInfo.totalPages)}${retryHint}：`,
+      header: clampHeader("Task"),
+      question: `Which Task in "${team.team_name}" is this session for${pageSuffix(taskPage, pageInfo.totalPages)}?${retryHint}`,
       options: opts,
     });
   }

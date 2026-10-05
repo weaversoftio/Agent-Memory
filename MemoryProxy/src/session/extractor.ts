@@ -15,7 +15,7 @@ import { PATH_SEP, SKIP_LABEL, MORE_LABEL } from "./form.js";
 
 // ── Path A: Match from option text (ask_followup_question click result) ────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+const SKIP_RE = /\bskip\b/i;
 
 /** Bypass 标记：用户选了"本次不关联"，整个 session-init 直接跳过。 */
 export const BYPASS_MARKER = "__bypass__" as const;
@@ -431,14 +431,14 @@ export function extractFromOptionText(
 
 /** Extract agent_id and optional task from user reply (regex-based). */
 export function extractStructured(content: string): SessionInitData | null {
-  const agentMatch = content.match(/agent\s*[:：=]\s*(\S+)/i);
+  const agentMatch = content.match(/agent\s*[:=]\s*(\S+)/i);
   if (!agentMatch) return null;
 
   const agent_id = agentMatch[1].trim();
   if (!agent_id) return null;
 
   let task_id: string | undefined;
-  const taskMatch = content.match(/task\s*[:：=]\s*(\S+)/i);
+  const taskMatch = content.match(/task\s*[:=]\s*(\S+)/i);
   if (taskMatch && taskMatch[1] !== "0" && taskMatch[1].toLowerCase() !== "skip") {
     task_id = taskMatch[1].trim();
   }

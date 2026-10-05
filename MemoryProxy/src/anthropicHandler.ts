@@ -978,7 +978,7 @@ export async function handleAnthropicMessages(
       // 记录 resetFlow 到外层供块外返回确认响应
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
-          agentName: initResult.agentDetail?.name ?? "未知",
+          agentName: initResult.agentDetail?.name ?? "unknown",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
           agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
@@ -1010,15 +1010,15 @@ export async function handleAnthropicMessages(
         ? `- **Team**: ${teamId}`
         : null;
     const lines = bypassed
-      ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
+      ? ["✅ Team assets not linked", "", "No team assets (Skill / memory / Knowledge) will be injected into the rest of this conversation."]
       : [
-          "✅ 已重新绑定团队资产",
+          "✅ Team assets re-linked",
           "",
           `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
           teamLine,
-          taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
+          taskName ? `- **Task**: ${taskName}` : "- **Task**: not linked",
           "",
-          "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
+          "The rest of this conversation uses the new Agent's Skills, memory and knowledge assets.",
         ].filter(Boolean);
     const text = (lines as string[]).join("\n");
 
@@ -1065,7 +1065,7 @@ export async function handleAnthropicMessages(
       // bypass 优化：会话未初始化时，命令不可用
       if (!sessionInfo || injectedSkipped) {
         const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
-        const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
+        const errText = `⚠️ The session is not set up yet, so this command is unavailable. Finish session setup (choose a Team/Agent) and try again.`;
         const errResponse = buildMemResponse(errText, {
           protocol: "anthropic",
           stream: isStream,

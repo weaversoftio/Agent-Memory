@@ -36,7 +36,7 @@
  * 会话初始化（选择 Team / Agent / 任务）表单问答的标题标记。
  * 用于剥离残留的标题行；真实用户输入不受影响。
  */
-const SESSION_INIT_TITLE_MARKER = "会话初始化";
+const SESSION_INIT_TITLE_MARKER = "Session setup";
 
 /**
  * Claude Code CLI 用 role=user 塞进对话流的"内部辅助 prompt"识别器。
