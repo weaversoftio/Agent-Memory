@@ -415,13 +415,13 @@ export class MetadataService {
         });
       } catch (err) {
         console.warn(
-          `[init-admin] 默认 Agent 创建失败，已跳过 (user=${created.user_id})`,
+          `[init-admin] failed to create the default Agent, skipped (user=${created.user_id})`,
           err instanceof Error ? err.message : err,
         );
       }
     } catch (err) {
       console.warn(
-        `[init-admin] 默认 Team 创建失败，已跳过 (user=${created.user_id})`,
+        `[init-admin] failed to create the default Team, skipped (user=${created.user_id})`,
         err instanceof Error ? err.message : err,
       );
     }

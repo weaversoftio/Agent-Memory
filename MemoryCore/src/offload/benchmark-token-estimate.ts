@@ -84,6 +84,6 @@ console.log([
   `${(totalTkMs / totalEstMs).toFixed(0)}x`.padStart(8),
 ].join(" │ "));
 
-console.log(`\n  精度: 平均误差 ${totalErr}%`);
-console.log(`  速度: tiktoken ${totalTkMs.toFixed(0)}ms vs estimate ${totalEstMs.toFixed(0)}ms (${(totalTkMs / totalEstMs).toFixed(0)}x faster)`);
+console.log(`\n  accuracy: mean error ${totalErr}%`);
+console.log(`  speed: tiktoken ${totalTkMs.toFixed(0)}ms vs estimate ${totalEstMs.toFixed(0)}ms (${(totalTkMs / totalEstMs).toFixed(0)}x faster)`);
 console.log();

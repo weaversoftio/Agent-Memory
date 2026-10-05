@@ -32,7 +32,7 @@ export interface PageForUpdate {
 function formatExistingPages(existingPages: ExistingPageInfo[]): string {
   return existingPages.length > 0
     ? existingPages
-        .map((p) => `- [${p.type}] ${p.relPath}${p.title ? ` — ${p.title}` : ""}${p.description ? `（${p.description}）` : ""}`)
+        .map((p) => `- [${p.type}] ${p.relPath}${p.title ? ` — ${p.title}` : ""}${p.description ? ` (${p.description})` : ""}`)
         .join("\n")
     : "(wiki is empty — this is the first source)";
 }
@@ -164,7 +164,7 @@ export function buildGeneratePrompt(args: {
   const existingList =
     existingPages.length > 0
       ? existingPages
-          .map((p) => `- [${p.type}] ${p.relPath}${p.title ? ` — ${p.title}` : ""}${p.description ? `（${p.description}）` : ""}`)
+          .map((p) => `- [${p.type}] ${p.relPath}${p.title ? ` — ${p.title}` : ""}${p.description ? ` (${p.description})` : ""}`)
           .join("\n")
       : "(wiki is empty — this is the first source)";
 
