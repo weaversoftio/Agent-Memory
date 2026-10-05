@@ -70,6 +70,7 @@ metadata:
 type: Opaque
 stringData:
   llm-api-key: {{ .Values.llm.apiKey | quote }}
+  git-auth-token: {{ .Values.gitAuth.token | default "" | quote }}
   # Hub: mounting this file makes start-combined.sh skip writing it into the
   # (read-only, root-owned) image. The panel requires a non-empty api_key; core's
   # Bearer gate is off, so the value is a placeholder and is not checked.

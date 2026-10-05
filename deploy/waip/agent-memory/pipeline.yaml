@@ -1,7 +1,7 @@
 description: "TencentDB Agent Memory — shared long-term memory, skills, wiki and code graph for coding agents. Panel (Memory Hub) plus an OpenAI/Anthropic-compatible proxy that agents point their base URL at; memory-core stays internal. SQLite on two PVCs, LLM via LiteLLM."
 
 app_name: "Agent Memory"
-version: "0.1.1"
+version: "0.1.2"
 has_ui: true
 
 # WARNING: never use the bash colon-dash or colon-question forms for any var
@@ -49,6 +49,19 @@ vars:
     description: "API key for LLM_BASE_URL (a LiteLLM virtual key)"
     default: ""
     required: true
+    sensitive: true
+  GIT_AUTH_URL_PREFIX:
+    description: "Code Graph private repos: the credential below is used for every repo URL under this prefix"
+    default: "https://bitbucket.org/weaversoft/"
+    required: true
+  GIT_AUTH_USERNAME:
+    description: "Username for that credential — x-token-auth for Bitbucket repository/project/workspace access tokens"
+    default: "x-token-auth"
+    required: true
+  GIT_AUTH_TOKEN:
+    description: "Read-only git access token (leave empty for public repos only)"
+    default: ""
+    required: false
     sensitive: true
   STORAGE_CLASS:
     description: "StorageClass for the two data PVCs"
