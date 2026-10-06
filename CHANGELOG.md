@@ -22,7 +22,7 @@ It covers every open-source module in the repository: `MemoryCore` / `MemoryPane
 - The Knowledge Service can clone private repositories with server-wide credentials:
   `KNOWLEDGE_GIT_AUTH_URL_PREFIX` / `_USERNAME` / `_TOKEN`. The token turns it on; it is sent
   as an HTTP header for matching URLs only and never stored in repository URLs
-- Repository URLs that embed a password are rejected
+- Repository URLs that embed a password or token are refused when the repository is fetched
 
 ---
 

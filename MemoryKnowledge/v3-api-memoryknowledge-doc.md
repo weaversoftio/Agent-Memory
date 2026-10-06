@@ -1,158 +1,158 @@
-# v3 接口文档 · 卷二 MemoryKnowledge
+# v3 API reference · Volume 2: MemoryKnowledge
 
-> 服务：MemoryKnowledge（知识服务，KS），端口 `8421`
-> 本卷覆盖 MemoryKnowledge 暴露的全部 `/v3/*` 接口。MemoryCore 见卷一，MemoryProxy 见卷三。
-> 维护约定：接口变更须在同一 PR 内更新本文档。
+> Service: MemoryKnowledge (Knowledge Service, KS), port `8421`
+> This volume covers every `/v3/*` endpoint MemoryKnowledge exposes. MemoryCore is in volume 1, MemoryProxy in volume 3.
+> Maintenance rule: an endpoint change must update this document in the same PR.
 
 ---
 
-## 1. 公共约定
+## 1. Common conventions
 
-### 1.1 服务与端口
+### 1.1 Service and port
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 服务 | MemoryKnowledge（知识服务，KS） |
-| 端口 | 8421（`PORT`，默认 `8421`） |
-| API 前缀 | `/v3`（`API_PREFIX`，默认 `/v3`） |
-| 方法 | 除 `GET /v3/auto-sync/status`、`GET /health` 外，**其余全部 `POST`** |
+| Service | MemoryKnowledge (Knowledge Service, KS) |
+| Port | 8421 (`PORT`, default `8421`) |
+| API prefix | `/v3` (`API_PREFIX`, default `/v3`) |
+| Methods | **everything is `POST`** except `GET /v3/auto-sync/status` and `GET /health` |
 | Content-Type | `application/json` |
-| 健康检查 | `GET /health`（**非 v3**，返回裸 JSON `{ status, timestamp }`） |
-| Swagger | `GET /docs`（UI）、`GET /openapi.json`（spec，非 v3） |
+| Health check | `GET /health` (**not v3**; returns bare JSON `{ status, timestamp }`) |
+| Swagger | `GET /docs` (UI), `GET /openapi.json` (spec, not v3) |
 
-### 1.2 响应信封
+### 1.2 Response envelope
 
-**注意：与 MemoryCore 不同，KS 的信封没有 `request_id` 字段。**
+**Note: unlike MemoryCore, the KS envelope has no `request_id` field.**
 
 ```json
 { "code": 0, "message": "ok", "data": { } }
 ```
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| code | number | `0` 成功；非 0 失败，且 **HTTP 状态码 = code**（`wrapError(code, ...)` 后 `c.json(..., code)`） |
-| message | string | 成功固定 `"ok"`；失败为**小写英文句子**（非枚举，见 §1.5） |
-| data | any | 业务数据；失败时为 `null` |
+| code | number | `0` success; non-zero failure, and **the HTTP status = code** (`wrapError(code, ...)` then `c.json(..., code)`) |
+| message | string | always `"ok"` on success; on failure a **lowercase English sentence** (not an enum, see §1.5) |
+| data | any | business data; `null` on failure |
 
-> `wrapOk` 的实现里 `request_id` 是可选的，但**所有路由均未传**，因此实际响应恒为 `{ code, message, data }` 三项。
+> `request_id` is optional in the `wrapOk` implementation, but **no route passes it**, so responses are always the three fields `{ code, message, data }`.
 
-> ⚠️ **isError 特例（code-graph 查询工具 / tools/call）**：工具执行失败（`result.isError === true`）时，HTTP 状态码是 **500**，但 body 仍是 `wrapOk(result)` 的**成功信封** `{ code: 0, message: "ok", data: { text, isError: true } }`。即 **`code=0` 但 HTTP=500**，违反上表「HTTP 状态码 = code」的常规约定。前端判断工具失败的唯一标志是 **`data.isError === true`**（错误文案在 `data.text`），不能只看 HTTP 状态或 `code`。
+> ⚠️ **isError special case (code-graph query tools / tools/call)**: when a tool fails (`result.isError === true`), the HTTP status is **500**, but the body is still the **success envelope** from `wrapOk(result)`: `{ code: 0, message: "ok", data: { text, isError: true } }`. So **`code=0` but HTTP=500**, breaking the usual "HTTP status = code" rule in the table above. The only reliable signal for a failed tool on the frontend is **`data.isError === true`** (the error text is in `data.text`); don't rely on the HTTP status or `code` alone.
 
-### 1.3 鉴权
+### 1.3 Auth
 
-KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
+KS uses an **internal-network trust model**, different from MemoryCore's user-key system:
 
-| 项 | 说明 |
+| Item | Description |
 |---|---|
-| 唯一必填 Header | `x-tdai-service-id`（租户/service 标识，即内核路由键） |
-| 其他鉴权 | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，除只读白名单外的端点需 `Authorization: Bearer <key>`（含 `internal/llm-binding/*` 全部）；为空则不启用（向后兼容，内网信任） |
-| 例外 | `POST /v3/internal/llm-binding/list` 不需要 `x-tdai-service-id` 头（返回全部 binding，供 Panel 启动缓存；key 启用时仍需 Bearer） |
+| Only required header | `x-tdai-service-id` (tenant/service identifier, i.e. the kernel routing key) |
+| Other auth | optional Bearer: when `KNOWLEDGE_SERVICE_KEY` is set, every endpoint outside the read-only allow-list needs `Authorization: Bearer <key>` (including all of `internal/llm-binding/*`); when empty it's off (backward compatible, internal-network trust) |
+| Exception | `POST /v3/internal/llm-binding/list` doesn't need the `x-tdai-service-id` header (it returns every binding, for the Panel's startup cache; with the key enabled it still needs the Bearer token) |
 
-> `service_id` / `team_id` / 资源 ID 统一做**路径分段白名单校验**（`^[A-Za-z0-9_-]+$`、长度 ≤200），防止路径穿越。
+> `service_id` / `team_id` / resource IDs all go through **path-segment allow-list validation** (`^[A-Za-z0-9_-]+$`, length ≤200) to prevent path traversal.
 
-### 1.4 ID 与多租户
+### 1.4 IDs and multi-tenancy
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| Wiki ID | `wiki-` + 8 位 `[0-9a-z]`（如 `wiki-a1b2c3d4`） |
-| Code-Graph ID | `cg-` + 8 位 `[0-9a-z]`（如 `cg-e5f6g7h8`） |
-| 多租户 | 所有接口按 `service_id` 收敛；**id-only 接口用 `getById(service_id, id)`，跨租户资源统一返回 404（不暴露存在性）** |
+| Wiki ID | `wiki-` + 8 characters `[0-9a-z]` (e.g. `wiki-a1b2c3d4`) |
+| Code-Graph ID | `cg-` + 8 characters `[0-9a-z]` (e.g. `cg-e5f6g7h8`) |
+| Multi-tenancy | every endpoint is scoped by `service_id`; **id-only endpoints use `getById(service_id, id)`, and resources of another tenant always return 404 (existence isn't revealed)** |
 
-### 1.5 错误 message 格式
+### 1.5 Error message format
 
-失败 `message` 为**小写英文句子**（非枚举、非 `CODE: detail` 格式），前端按 HTTP `code` 分支，不要解析 message。常见示例：
+The failure `message` is a **lowercase English sentence** (not an enum, not the `CODE: detail` format). The frontend should branch on the HTTP `code` and not parse the message. Common examples:
 
-| code | message 示例 | 场景 |
+| code | message example | Case |
 |---|---|---|
-| 400 | `x-tdai-service-id header is required` / `wiki_id is required` / `query is required` | 参数缺失 |
-| 400 | `invalid path: traversal detected` / `forbidden path (structural file or outside wiki/)` | 路径非法 |
-| 404 | `wiki not found` / `code graph not found` | 资源不存在（含跨租户） |
-| 409 | `wiki is processing; cannot write/delete` | 状态冲突 |
-| 409 | `busy` | 并发拒绝（ingest/sync） |
-| 413 | `content exceeds size limit` / `too many files (max 10)` | 超限 |
-| 503 | `code graph instance not loaded` | 依赖未就绪 |
+| 400 | `x-tdai-service-id header is required` / `wiki_id is required` / `query is required` | missing parameter |
+| 400 | `invalid path: traversal detected` / `forbidden path (structural file or outside wiki/)` | invalid path |
+| 404 | `wiki not found` / `code graph not found` | resource doesn't exist (including other tenants') |
+| 409 | `wiki is processing; cannot write/delete` | state conflict |
+| 409 | `busy` | concurrency rejection (ingest/sync) |
+| 413 | `content exceeds size limit` / `too many files (max 10)` | over the limit |
+| 503 | `code graph instance not loaded` | dependency not ready |
 
-### 1.6 资源状态枚举
+### 1.6 Resource states
 
-| 资源 | 状态值 | 说明 |
+| Resource | States | Notes |
 |---|---|---|
-| Wiki | `draft` → `pending` → `processing` → `ready` / `failed` | `draft` 是 create 建壳初始态 |
-| Code-Graph | `pending` / `processing` / `ready` / `failed` | 无 `draft` |
+| Wiki | `draft` → `pending` → `processing` → `ready` / `failed` | `draft` is the initial state of the shell created by create |
+| Code-Graph | `pending` / `processing` / `ready` / `failed` | no `draft` |
 
-> 常见约定：`ready` 前的状态，查询类接口（graph/search/query tools）返回**空结果而非错误**（见 §3.1/§3.2）。
+> Common rule: before `ready`, query endpoints (graph/search/query tools) return **empty results, not errors** (see §3.1/§3.2).
 
 ---
 
-## 2. 接口目录
+## 2. Endpoint list
 
-| 模块 | 接口数 | 前缀 |
+| Module | Endpoints | Prefix |
 |---|---|---|
 | Wiki | 16 | `/v3/wiki/*` |
 | Code-Graph | 14 | `/v3/code-graph/*` |
-| Tools（Agent 自发现） | 2 | `/v3/tools/*` |
+| Tools (Agent self-discovery) | 2 | `/v3/tools/*` |
 | Internal LLM-Binding | 3 | `/v3/internal/llm-binding/*` |
 | Auto-Sync | 2 | `/v3/auto-sync/*` |
 
-**合计 37 个接口。**
+**37 endpoints in total.**
 
 ---
 
-## 3. 接口明细
+## 3. Endpoint details
 
-## 3.1 Wiki（16）
+## 3.1 Wiki (16)
 
-> 注释写"15 endpoints"，实际代码 16 个（多一个 `update-meta`）。
-> 分两类：**id-only**（仅 `x-tdai-service-id` + `wiki_id`，跨租户 404）与 **with-team**（需 `team_id`）。
+> The comment says "15 endpoints"; the code actually has 16 (one more: `update-meta`).
+> Two kinds: **id-only** (only `x-tdai-service-id` + `wiki_id`; another tenant's resource gives 404) and **with-team** (needs `team_id`).
 
-**WikiDetail 统一出参**：
+**WikiDetail, the common response shape**:
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| wiki_id | string | 资源 ID |
-| team_id | string | 团队 ID |
-| name | string | 名称 |
-| service_url | string\|null | tools 自发现 base URL |
-| summary | string\|null | 摘要 |
-| status | string | 状态（见 §1.6） |
-| internal_status | string\|null | 内部细粒度状态 |
-| sync_error | string\|null | 同步错误 |
-| version | string | 版本号（字符串） |
+| wiki_id | string | resource ID |
+| team_id | string | team ID |
+| name | string | name |
+| service_url | string\|null | tools self-discovery base URL |
+| summary | string\|null | summary |
+| status | string | state (see §1.6) |
+| internal_status | string\|null | finer-grained internal state |
+| sync_error | string\|null | sync error |
+| version | string | version (a string) |
 | owner_user_id | string\|null | owner |
-| page_count | number\|null | 页面数 |
-| last_sync_at | string\|null | 最近同步时间 |
-| created_at / updated_at | string | 时间 |
+| page_count | number\|null | number of pages |
+| last_sync_at | string\|null | last sync time |
+| created_at / updated_at | string | times |
 
 ### POST /v3/wiki/create
 
-建 Wiki 壳（`draft` 状态）。**幂等**：同名同 team 返回已存在记录（HTTP 200），新建返回 201。
+Creates a Wiki shell (`draft` state). **Idempotent**: the same name in the same team returns the existing record (HTTP 200); a new one returns 201.
 
-**请求体**（with-team）
+**Request body** (with-team)
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| team_id | string | 是 | 团队 ID |
-| name | string | 是 | 名称 |
-| user_id / agent_id / task_id | string | 否 | 归属（owner_user_id = user_id） |
+| team_id | string | yes | team ID |
+| name | string | yes | name |
+| user_id / agent_id / task_id | string | no | ownership (owner_user_id = user_id) |
 
-**响应** `data`：`WikiDetail`。
+**Response** `data`: `WikiDetail`.
 
-**错误**：`400`（缺 team_id 或 name）。
+**Errors**: `400` (missing team_id or name).
 
-**示例**
+**Example**
 
 ```json
-// 请求
+// request
 POST /v3/wiki/create
-{ "team_id": "t_1", "name": "团队 wiki" }
+{ "team_id": "t_1", "name": "Team wiki" }
 
-// 响应（201）
+// response (201)
 {
   "code": 0,
   "message": "ok",
   "data": {
     "wiki_id": "wiki-a1b2c3d4",
     "team_id": "t_1",
-    "name": "团队 wiki",
+    "name": "Team wiki",
     "status": "draft",
     "version": "0",
     "owner_user_id": "u_1",
@@ -164,238 +164,238 @@ POST /v3/wiki/create
 
 ### POST /v3/wiki/list
 
-按 team 分页列表。
+Paged list by team.
 
-**请求体**：`team_id`(必)、`status?`、`limit?`(默认20)、`offset?`(默认0)。
+**Request body**: `team_id` (required), `status?`, `limit?` (default 20), `offset?` (default 0).
 
-**响应** `data`：`{ items: WikiDetail[], total }`。
+**Response** `data`: `{ items: WikiDetail[], total }`.
 
 ### POST /v3/wiki/get
 
-id-only 单查。
+id-only single lookup.
 
-**请求体**：`wiki_id`(必)。
+**Request body**: `wiki_id` (required).
 
-**响应** `data`：`WikiDetail`。
+**Response** `data`: `WikiDetail`.
 
-**错误**：`404`(wiki not found)。
+**Errors**: `404` (wiki not found).
 
 ### POST /v3/wiki/update-meta
 
-更新 name / summary。
+Updates name / summary.
 
-**请求体**：`wiki_id`(必)、`name?`、`summary?`（至少一个）。
+**Request body**: `wiki_id` (required), `name?`, `summary?` (at least one).
 
-**响应** `data`：`WikiDetail`。
+**Response** `data`: `WikiDetail`.
 
-**错误**：`400`(两者都没传)、`404`。
+**Errors**: `400` (neither given), `404`.
 
 ### POST /v3/wiki/delete
 
-批量删除（级联清理连接/元数据/磁盘 + 注销 engine）。
+Batch delete (cascades to connections/metadata/disk + unregisters the engine).
 
-**请求体**：`wiki_ids`(1–100，非空数组)。
+**Request body**: `wiki_ids` (1–100, non-empty array).
 
-**响应** `data`：`BatchDeleteResult` = `{ deleted_ids: string[], failed: [{ id, reason }] }`。
+**Response** `data`: `BatchDeleteResult` = `{ deleted_ids: string[], failed: [{ id, reason }] }`.
 
-> 单个失败不整体报错，写入 `failed`（reason：`invalid id` / `not found` / `delete failed`）。
+> A single failure doesn't fail the whole call; it goes into `failed` (reason: `invalid id` / `not found` / `delete failed`).
 
 ### POST /v3/wiki/ingest
 
-触发 Wiki 抽取。**空 wiki（无源文件）拒绝**。
+Triggers Wiki extraction. **An empty wiki (no source files) is rejected**.
 
-**请求体**：`wiki_id`(必)、`user_id?`。
+**Request body**: `wiki_id` (required), `user_id?`.
 
-**响应** `data`：`{ wiki_id, status }`（HTTP `202`）。
+**Response** `data`: `{ wiki_id, status }` (HTTP `202`).
 
-**错误**：`400`(空 wiki)、`404`(不存在)、`409`(busy，data 带 `{ status, step }`)。
+**Errors**: `400` (empty wiki), `404` (doesn't exist), `409` (busy; data carries `{ status, step }`).
 
 ### POST /v3/wiki/raw/ls
 
-列出原始源文件（id-only）。
+Lists the raw source files (id-only).
 
-**请求体**：`wiki_id`。
+**Request body**: `wiki_id`.
 
-**响应** `data`：`{ items: RawFile[] }`。
+**Response** `data`: `{ items: RawFile[] }`.
 
 ### POST /v3/wiki/raw/read
 
-批量读原始文件（id-only）。
+Batch-reads raw files (id-only).
 
-**请求体**：`wiki_id`、`filenames: string[]`（非空）。
+**Request body**: `wiki_id`, `filenames: string[]` (non-empty).
 
-**响应** `data`：`{ items }`。
+**Response** `data`: `{ items }`.
 
-**错误**：`400`(参数)、`404`(wiki 不存在 / 文件缺失)、`413`(过大)。
+**Errors**: `400` (parameters), `404` (wiki doesn't exist / file missing), `413` (too large).
 
 ### POST /v3/wiki/raw/write
 
-上传源文件（with-team）。**触发 ingest 前必须先写 raw**。
+Uploads source files (with-team). **Raw files must be written before triggering ingest**.
 
-**请求体**
+**Request body**
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| team_id | string | 是 | 团队 ID |
-| wiki_id | string | 是 | Wiki ID |
-| files | object[] | 是 | `[{ filename, content }]`，≤10 个，单文件 ≤512KB，总 ≤5MB |
-| user_id / agent_id / task_id | string | 否 | 归属 |
+| team_id | string | yes | team ID |
+| wiki_id | string | yes | Wiki ID |
+| files | object[] | yes | `[{ filename, content }]`, ≤10 files, ≤512KB each, ≤5MB in total |
+| user_id / agent_id / task_id | string | no | ownership |
 
-**响应** `data`：`{ items }`。
+**Response** `data`: `{ items }`.
 
-**错误**：`400`(结构非法)、`404`、`409`(processing)、`413`(超限)。
+**Errors**: `400` (invalid structure), `404`, `409` (processing), `413` (over the limit).
 
-**示例**
+**Example**
 
 ```json
-// 请求
+// request
 POST /v3/wiki/raw/write
-{ "team_id": "t_1", "wiki_id": "wiki-a1b2c3d4", "files": [ { "filename": "README.md", "content": "# 首页" } ] }
+{ "team_id": "t_1", "wiki_id": "wiki-a1b2c3d4", "files": [ { "filename": "README.md", "content": "# Home" } ] }
 
-// 响应
+// response
 { "code": 0, "message": "ok", "data": { "items": [ { "filename": "README.md", "status": "written" } ] } }
 ```
 
 ### POST /v3/wiki/raw/rm
 
-删除原始文件（with-team）。
+Deletes raw files (with-team).
 
-**请求体**：`team_id`、`wiki_id`、`filenames: string[]`。
+**Request body**: `team_id`, `wiki_id`, `filenames: string[]`.
 
-**响应** `data`：删除结果。
+**Response** `data`: deletion result.
 
-**错误**：`400`、`404`、`409`(processing)。
+**Errors**: `400`, `404`, `409` (processing).
 
 ### POST /v3/wiki/page/ls
 
-列出抽取后的页面（id-only）。
+Lists the extracted pages (id-only).
 
-**请求体**：`wiki_id`。
+**Request body**: `wiki_id`.
 
-**响应** `data`：`{ items: Page[] }`（`Page = { ref, title, path }`）。
+**Response** `data`: `{ items: Page[] }` (`Page = { ref, title, path }`).
 
 ### POST /v3/wiki/page/read
 
-批量读页面（id-only）。
+Batch-reads pages (id-only).
 
-**请求体**：`wiki_id`、`refs: string[]`（非空）。
+**Request body**: `wiki_id`, `refs: string[]` (non-empty).
 
-**响应** `data`：`{ items }`。
+**Response** `data`: `{ items }`.
 
-**错误**：`400`、`404`。
+**Errors**: `400`, `404`.
 
 ### POST /v3/wiki/page/write
 
-写页面（with-team）。
+Writes pages (with-team).
 
-**请求体**：`team_id`、`wiki_id`、`pages: [{ ref, content }]`（非空）。
+**Request body**: `team_id`, `wiki_id`, `pages: [{ ref, content }]` (non-empty).
 
-**响应** `data`：`{ items }`。
+**Response** `data`: `{ items }`.
 
-**错误**：`400`、`404`、`409`(processing)。
+**Errors**: `400`, `404`, `409` (processing).
 
 ### POST /v3/wiki/page/rm
 
-删除页面（with-team）。
+Deletes pages (with-team).
 
-**请求体**：`team_id`、`wiki_id`、`refs: string[]`。
+**Request body**: `team_id`, `wiki_id`, `refs: string[]`.
 
-**响应** `data`：删除结果。
+**Response** `data`: deletion result.
 
-**错误**：`400`、`404`、`409`(processing)。
+**Errors**: `400`, `404`, `409` (processing).
 
 ### POST /v3/wiki/graph
 
-知识图谱（id-only）。**非 `ready` 返回空图（非错误）**。
+Knowledge graph (id-only). **Not `ready` returns an empty graph (not an error)**.
 
-**请求体**：`wiki_id`。
+**Request body**: `wiki_id`.
 
-**响应** `data`：`{ nodes: [], edges: [], communities: [] }`（未 ready 时为空；ready 时返回 `wikiMgr.graph` 结果）。
+**Response** `data`: `{ nodes: [], edges: [], communities: [] }` (empty before ready; once ready, the result of `wikiMgr.graph`).
 
 ### POST /v3/wiki/search
 
-全文搜索（BM25，id-only）。**非 `ready` 返回空结果（非错误）**。
+Full-text search (BM25, id-only). **Not `ready` returns empty results (not an error)**.
 
-**请求体**
+**Request body**
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| wiki_id | string | 是 | Wiki ID |
-| query | string | 是 | 检索词 |
-| limit | number | 否 | 默认 20 |
-| hop | number | 否 | 图谱扩展跳数，整数 0–5 |
-| decay | number | 否 | 衰减系数 0–1 |
-| minScore | number | 否 | 最低相关度（非负） |
+| wiki_id | string | yes | Wiki ID |
+| query | string | yes | search terms |
+| limit | number | no | default 20 |
+| hop | number | no | graph expansion hops, integer 0–5 |
+| decay | number | no | decay factor 0–1 |
+| minScore | number | no | minimum relevance (non-negative) |
 
-**响应** `data`：`{ results, links, count }`。
+**Response** `data`: `{ results, links, count }`.
 
-**错误**：`400`(query 缺失 / hop/decay/minScore 越界)、`404`。
+**Errors**: `400` (query missing / hop/decay/minScore out of range), `404`.
 
-**示例**
+**Example**
 
 ```json
-// 请求
+// request
 POST /v3/wiki/search
-{ "wiki_id": "wiki-a1b2c3d4", "query": "发版", "limit": 10 }
+{ "wiki_id": "wiki-a1b2c3d4", "query": "release", "limit": 10 }
 
-// 响应
-{ "code": 0, "message": "ok", "data": { "results": [ { "ref": "page/发版计划", "title": "发版计划" } ], "links": [], "count": 1 } }
+// response
+{ "code": 0, "message": "ok", "data": { "results": [ { "ref": "page/release-plan", "title": "Release plan" } ], "links": [], "count": 1 } }
 ```
 
 ---
 
-## 3.2 Code-Graph（14）
+## 3.2 Code-Graph (14)
 
-> 注释写"13 endpoints"，实际 14 个（多一个 `update-meta`）。
-> 分两类：**Management**（6：create/list/get/update-meta/sync/delete）与 **Query**（8：search/explore/callers/callees/impact/node/status/files）。
-> Query 委托 `engines/code executeTool`，返回 `{ text, isError }` 文本块。
+> The comment says "13 endpoints"; there are actually 14 (one more: `update-meta`).
+> Two kinds: **Management** (6: create/list/get/update-meta/sync/delete) and **Query** (8: search/explore/callers/callees/impact/node/status/files).
+> Queries delegate to `engines/code executeTool` and return a `{ text, isError }` text block.
 
-**CodeGraphDetail 统一出参**：
+**CodeGraphDetail, the common response shape**:
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| code_graph_id | string | 资源 ID |
-| team_id | string | 团队 ID |
-| repo_name | string | 仓库名 |
-| repo_url | string | 仓库地址 |
-| branch | string | 分支（默认 main） |
+| code_graph_id | string | resource ID |
+| team_id | string | team ID |
+| repo_name | string | repository name |
+| repo_url | string | repository address |
+| branch | string | branch (default main) |
 | commit_hash | string\|null | commit |
-| service_url | string\|null | tools 自发现 base URL |
-| summary | string\|null | 摘要 |
-| status | string | 状态（见 §1.6） |
-| sync_error | string\|null | 同步错误 |
-| version | string | 版本号 |
+| service_url | string\|null | tools self-discovery base URL |
+| summary | string\|null | summary |
+| status | string | state (see §1.6) |
+| sync_error | string\|null | sync error |
+| version | string | version |
 | owner_user_id | string\|null | owner |
-| stats | `{ files, nodes, edges }`\|null | 统计 |
-| last_sync_at | string\|null | 最近同步时间 |
-| created_at / updated_at | string | 时间 |
+| stats | `{ files, nodes, edges }`\|null | statistics |
+| last_sync_at | string\|null | last sync time |
+| created_at / updated_at | string | times |
 
 ### POST /v3/code-graph/create
 
-建 Code-Graph（`pending`，自动触发 build）。**幂等**：同 repo_url+branch 返回已存在记录（200），新建 201。
+Creates a Code-Graph (`pending`, build triggered automatically). **Idempotent**: the same repo_url+branch returns the existing record (200); a new one returns 201.
 
-**请求体**（with-team）
+**Request body** (with-team)
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| team_id | string | 是 | 团队 ID |
-| repo_url | string | 是 | 仓库地址 |
-| branch | string | 否 | 分支，默认 `main` |
-| repo_name | string | 否 | 仓库名 |
-| user_id / agent_id / task_id | string | 否 | 归属 |
+| team_id | string | yes | team ID |
+| repo_url | string | yes | repository address. Private repositories need the server-wide git credentials (`KNOWLEDGE_GIT_AUTH_*`); a URL that embeds a password or token fails the build (status `failed`, reason in `sync_error`) |
+| branch | string | no | branch, default `main` |
+| repo_name | string | no | repository name |
+| user_id / agent_id / task_id | string | no | ownership |
 
-**响应** `data`：`CodeGraphDetail`。
+**Response** `data`: `CodeGraphDetail`.
 
-**错误**：`400`(缺 team_id/repo_url)。
+**Errors**: `400` (missing team_id/repo_url).
 
-**示例**
+**Example**
 
 ```json
-// 请求
+// request
 POST /v3/code-graph/create
 { "team_id": "t_1", "repo_url": "https://github.com/org/repo", "branch": "main" }
 
-// 响应（201）
+// response (201)
 {
   "code": 0,
   "message": "ok",
@@ -414,85 +414,85 @@ POST /v3/code-graph/create
 
 ### POST /v3/code-graph/list
 
-按 team 分页列表。
+Paged list by team.
 
-**请求体**：`team_id`(必)、`status?`、`limit?`、`offset?`。
+**Request body**: `team_id` (required), `status?`, `limit?`, `offset?`.
 
-**响应** `data`：`{ items: CodeGraphDetail[], total }`。
+**Response** `data`: `{ items: CodeGraphDetail[], total }`.
 
 ### POST /v3/code-graph/get
 
-id-only 单查。
+id-only single lookup.
 
-**请求体**：`code_graph_id`。
+**Request body**: `code_graph_id`.
 
-**响应** `data`：`CodeGraphDetail`。
+**Response** `data`: `CodeGraphDetail`.
 
-**错误**：`404`。
+**Errors**: `404`.
 
 ### POST /v3/code-graph/update-meta
 
-更新 repo_name / summary。
+Updates repo_name / summary.
 
-**请求体**：`code_graph_id`、`repo_name?`、`summary?`（至少一个）。
+**Request body**: `code_graph_id`, `repo_name?`, `summary?` (at least one).
 
-**响应** `data`：`CodeGraphDetail`。
+**Response** `data`: `CodeGraphDetail`.
 
-**错误**：`400`、`404`。
+**Errors**: `400`, `404`.
 
 ### POST /v3/code-graph/sync
 
-触发同步（重建索引）。
+Triggers a sync (rebuilds the index).
 
-**请求体**：`code_graph_id`、`user_id?`。
+**Request body**: `code_graph_id`, `user_id?`.
 
-**响应** `data`：`{ code_graph_id, status }`（HTTP `202`）。
+**Response** `data`: `{ code_graph_id, status }` (HTTP `202`).
 
-**错误**：`404`、`409`(busy，data 带 `{ status, step }`)。
+**Errors**: `404`, `409` (busy; data carries `{ status, step }`).
 
 ### POST /v3/code-graph/delete
 
-批量删除。
+Batch delete.
 
-**请求体**：`code_graph_ids`(1–100，非空)。
+**Request body**: `code_graph_ids` (1–100, non-empty).
 
-**响应** `data`：`BatchDeleteResult`。
+**Response** `data`: `BatchDeleteResult`.
 
 ---
 
-### 查询工具（8 个，均 id-only）
+### Query tools (8, all id-only)
 
-> 8 个查询接口由 `CODEGRAPH_QUERY_TOOL_NAMES` 统一循环注册，共用同一 handler：
-> - 先 `getById(service_id, code_graph_id)` 收敛归属，`404` 兜底；
-> - **非 `ready` 返回 `{ text: "", isError: false }`（HTTP 200，非错误）**；
-> - 参数按 `QUERY_SPECS` 白名单严格校验，**未声明字段直接 400**（`unexpected field: xxx`）；
-> - 委托 `executeTool`，结果 `isError=true` 时 HTTP 500，但 body 仍为 `code=0` 成功信封，失败标志是 `data.isError=true`（见 §1.2 isError 特例）。
+> The 8 query endpoints are registered in one loop over `CODEGRAPH_QUERY_TOOL_NAMES` and share one handler:
+> - first `getById(service_id, code_graph_id)` checks ownership, with `404` as the fallback;
+> - **not `ready` returns `{ text: "", isError: false }` (HTTP 200, not an error)**;
+> - parameters are strictly validated against the `QUERY_SPECS` allow-list; **any undeclared field gives 400** (`unexpected field: xxx`);
+> - it delegates to `executeTool`; when the result has `isError=true` the HTTP status is 500 but the body is still the `code=0` success envelope, and the failure signal is `data.isError=true` (see the isError special case in §1.2).
 
-| 接口 | 参数（默认值/范围） | 说明 |
+| Endpoint | Parameters (default/range) | Description |
 |---|---|---|
-| `POST /search` | `query`(必)、`kind?`(function/method/class/interface/type/variable/route/component)、`limit?`(默认10，1–100) | 按符号名搜索，只返回位置（不含源码） |
-| `POST /explore` | `query`(必)、`maxFiles?`(默认12，1–200) | **首选**：按文件分组返回相关符号完整源码 |
-| `POST /callers` | `symbol`(必)、`limit?`(默认20，1–200) | 列出调用 symbol 的函数 |
-| `POST /callees` | `symbol`(必)、`limit?`(默认20，1–200) | 列出 symbol 调用的函数 |
-| `POST /impact` | `symbol`(必)、`depth?`(默认2，1–10) | 影响分析 |
-| `POST /node` | `symbol`(必)、`includeCode?`(默认false)、`file?`、`line?`(≥1) | 单个符号完整信息（可含源码） |
-| `POST /status` | 无参数 | 索引健康检查 |
-| `POST /files` | `path?`、`pattern?`、`format?`(tree/flat/grouped，默认tree)、`includeMetadata?`(默认true)、`maxDepth?`(≥1) | 索引文件树 |
+| `POST /search` | `query` (required), `kind?` (function/method/class/interface/type/variable/route/component), `limit?` (default 10, 1–100) | search by symbol name; returns locations only (no source) |
+| `POST /explore` | `query` (required), `maxFiles?` (default 12, 1–200) | **preferred**: returns the full source of relevant symbols grouped by file |
+| `POST /callers` | `symbol` (required), `limit?` (default 20, 1–200) | lists the functions that call symbol |
+| `POST /callees` | `symbol` (required), `limit?` (default 20, 1–200) | lists the functions symbol calls |
+| `POST /impact` | `symbol` (required), `depth?` (default 2, 1–10) | impact analysis |
+| `POST /node` | `symbol` (required), `includeCode?` (default false), `file?`, `line?` (≥1) | full information on one symbol (optionally with source) |
+| `POST /status` | no parameters | index health check |
+| `POST /files` | `path?`, `pattern?`, `format?` (tree/flat/grouped, default tree), `includeMetadata?` (default true), `maxDepth?` (≥1) | indexed file tree |
 
-**统一请求体**：`code_graph_id`(必) + 上表参数。
+**Common request body**: `code_graph_id` (required) + the parameters above.
 
-**统一响应** `data`：`{ text: string, isError: boolean }`。
+**Common response** `data`: `{ text: string, isError: boolean }`.
 
-**统一错误**：`400`(参数)、`404`(code graph not found)、`500`(工具执行失败，`data.isError=true`，body 仍 code=0)、`503`(instance not loaded)。
+**Common errors**: `400` (parameters), `404` (code graph not found), `500` (tool failed, `data.isError=true`, body still code=0), `503` (instance not loaded).
 
-**示例**（explore）
+**Example** (explore)
 
 ```json
-// 请求
+// request
 POST /v3/code-graph/explore
-{ "code_graph_id": "cg-e5f6g7h8", "query": "用户登录逻辑", "maxFiles": 12 }
+{ "code_graph_id": "cg-e5f6g7h8", "query": "user login logic", "maxFiles": 12 }
 
-// 响应
+// response
 {
   "code": 0,
   "message": "ok",
@@ -502,49 +502,49 @@ POST /v3/code-graph/explore
 
 ---
 
-## 3.3 Tools — Agent 自发现（2）
+## 3.3 Tools: Agent self-discovery (2)
 
-> v7 progressive-exposure：LLM Agent 先 `tools/list` 发现可用工具，再 `tools/call` 执行。
-> 仅暴露**只读查询工具**，管理操作（create/delete/ingest/sync）不暴露。
-> `knowledge_id` 决定资源类型：`wiki-*` → Wiki 工具集（7），`cg-*` → Code-Graph 工具集（9）。
+> v7 progressive exposure: an LLM Agent first discovers the available tools with `tools/list`, then runs them with `tools/call`.
+> Only **read-only query tools** are exposed; management operations (create/delete/ingest/sync) are not.
+> `knowledge_id` decides the resource type: `wiki-*` → the Wiki tool set (7), `cg-*` → the Code-Graph tool set (9).
 
 ### POST /v3/tools/list
 
-列出某知识资源可用的工具。
+Lists the tools available for a knowledge resource.
 
-**请求体**：`knowledge_id`(必)。
+**Request body**: `knowledge_id` (required).
 
-**响应** `data`
+**Response** `data`
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| knowledge_id | string | 回显 |
+| knowledge_id | string | echoed |
 | type | string | `wiki` / `code-graph` |
-| name | string | 资源名 |
-| summary | string\|null | 摘要 |
-| status | string | 资源状态 |
+| name | string | resource name |
+| summary | string\|null | summary |
+| status | string | resource state |
 | tools | object[] | `[{ name, description, params }]` |
 
-**错误**：`400`(knowledge_id 缺失/格式非法)、`404`(资源不存在)。
+**Errors**: `400` (knowledge_id missing/invalid format), `404` (resource doesn't exist).
 
-**示例**
+**Example**
 
 ```json
-// 请求
+// request
 POST /v3/tools/list
 { "knowledge_id": "wiki-a1b2c3d4" }
 
-// 响应
+// response
 {
   "code": 0,
   "message": "ok",
   "data": {
     "knowledge_id": "wiki-a1b2c3d4",
     "type": "wiki",
-    "name": "团队 wiki",
+    "name": "Team wiki",
     "status": "ready",
     "tools": [
-      { "name": "search", "description": "BM25 全文搜索 wiki 页面内容", "params": { "query": { "type": "string", "required": true } } }
+      { "name": "search", "description": "BM25 full-text search over wiki page content. Find relevant documents by keyword.", "params": { "query": { "type": "string", "required": true } } }
     ]
   }
 }
@@ -552,112 +552,112 @@ POST /v3/tools/list
 
 ### POST /v3/tools/call
 
-执行工具。
+Runs a tool.
 
-**请求体**
+**Request body**
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| knowledge_id | string | 是 | 资源 ID |
-| tool_name | string | 是 | 工具名 |
-| params | object | 是 | 工具参数（按 tools/list 定义） |
+| knowledge_id | string | yes | resource ID |
+| tool_name | string | yes | tool name |
+| params | object | yes | tool parameters (as defined by tools/list) |
 
-**响应** `data`：工具执行结果（wiki 工具返回结构化数据；code-graph 工具返回 `{ text, isError }`）。
+**Response** `data`: the tool result (wiki tools return structured data; code-graph tools return `{ text, isError }`).
 
-**错误**：`400`(参数)、`403`(未知工具)、`404`(资源不存在)、`500`(code-graph 工具执行失败，`data.isError=true`，body 仍 code=0)、`503`(instance not loaded)。
+**Errors**: `400` (parameters), `403` (unknown tool), `404` (resource doesn't exist), `500` (code-graph tool failed, `data.isError=true`, body still code=0), `503` (instance not loaded).
 
-> **工具白名单**（tool_name）：
-> - Wiki（7）：`get_info`、`search`、`list_pages`、`read_page`、`get_graph`、`list_raw`、`read_raw`
-> - Code-Graph（9）：`get_info`、`search`、`explore`、`callers`、`callees`、`impact`、`node`、`status`、`files`
+> **Tool allow-list** (tool_name):
+> - Wiki (7): `get_info`, `search`, `list_pages`, `read_page`, `get_graph`, `list_raw`, `read_raw`
+> - Code-Graph (9): `get_info`, `search`, `explore`, `callers`, `callees`, `impact`, `node`, `status`, `files`
 
 ---
 
-## 3.4 Internal LLM-Binding（3）
+## 3.4 Internal LLM-Binding (3)
 
-> 每实例 LLM 路由配置，控制面（TMC / operator curl）。`api_key` 永不回显。
+> Per-instance LLM routing config, for the control plane (TMC / operator curl). `api_key` is never echoed.
 
 ### POST /v3/internal/llm-binding/set
 
-upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
+Upserts a binding (`proxy`\|`byo`). **Idempotent**: a repeated set overwrites.
 
-**请求体**
+**Request body**
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| mode | string | 是 | `proxy` / `byo` |
-| proxy_base_url | string | proxy 必填 | 代理 LLM 地址 |
-| base_url | string | byo 必填 | 自建 LLM 地址 |
-| api_key | string | 首次必填 | 已存在记录不传则保留原值 |
-| enabled | boolean | 否 | 默认 true |
+| mode | string | yes | `proxy` / `byo` |
+| proxy_base_url | string | required for proxy | proxy LLM address |
+| base_url | string | required for byo | your own LLM address |
+| api_key | string | required the first time | for an existing record, omitting it keeps the old value |
+| enabled | boolean | no | default true |
 
-**响应** `data`：`{ service_id, mode, enabled, updated_at }`（**不含 api_key**）。
+**Response** `data`: `{ service_id, mode, enabled, updated_at }` (**no api_key**).
 
-**错误**：`400`(mode 非法 / 缺地址 / 首次缺 api_key)。
+**Errors**: `400` (invalid mode / missing address / api_key missing the first time).
 
 ### POST /v3/internal/llm-binding/status
 
-读 binding 状态（不含 api_key）。
+Reads the binding state (without api_key).
 
-**响应** `data`
+**Response** `data`
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Description |
 |---|---|---|
-| bound | boolean | 是否已配置 binding |
-| mode | string\|null | `proxy` / `byo`；未配置为 `null` |
-| enabled | boolean | 是否启用；未配置为 `false` |
+| bound | boolean | whether a binding is configured |
+| mode | string\|null | `proxy` / `byo`; `null` when not configured |
+| enabled | boolean | whether it's enabled; `false` when not configured |
 
-> 未配置时返回 `{ bound: false, mode: null, enabled: false }`。
+> When not configured it returns `{ bound: false, mode: null, enabled: false }`.
 
 ### POST /v3/internal/llm-binding/list
 
-列出全部 binding（**不需要 `x-tdai-service-id` 头**）。
+Lists every binding (**doesn't need the `x-tdai-service-id` header**).
 
-**响应** `data`：`{ items: [{ service_id, mode, proxy_base_url, base_url, has_api_key, enabled }] }`。
+**Response** `data`: `{ items: [{ service_id, mode, proxy_base_url, base_url, has_api_key, enabled }] }`.
 
 ---
 
-## 3.5 Auto-Sync（2）
+## 3.5 Auto-Sync (2)
 
-> 定时同步调度器的状态查询 + 手动触发。**无鉴权**。是 v3 里罕见的含 GET 的模块。
+> State query + manual trigger for the scheduled sync scheduler. **No auth**. One of the rare v3 modules with a GET.
 
 ### GET /v3/auto-sync/status
 
-查询调度器运行状态 + 配置。
+Reads the scheduler's run state + config.
 
-**响应** `data`：`{ running, activeSyncs, scanning, ... , config: { enabled, scanIntervalMs, maxConcurrentSyncs } }`。
+**Response** `data`: `{ running, activeSyncs, scanning, ... , config: { enabled, scanIntervalMs, maxConcurrentSyncs } }`.
 
 ### POST /v3/auto-sync/trigger
 
-手动触发一轮全量扫描（fire-and-forget，立即返回）。
+Manually triggers one full scan (fire-and-forget, returns immediately).
 
-**响应** `data`：`{ triggered: boolean, reason? }`（`KNOWLEDGE_AUTO_SYNC_ENABLED` 关闭时 `triggered=false` + reason）。
+**Response** `data`: `{ triggered: boolean, reason? }` (`triggered=false` + reason when `KNOWLEDGE_AUTO_SYNC_ENABLED` is off).
 
 ---
 
-## 4. 附录
+## 4. Appendix
 
-### 4.1 与 MemoryCore 的关键差异（跨卷对接必读）
+### 4.1 Key differences from MemoryCore (read before integrating across volumes)
 
-| 维度 | MemoryCore（卷一） | MemoryKnowledge（本卷） |
+| Dimension | MemoryCore (volume 1) | MemoryKnowledge (this volume) |
 |---|---|---|
-| 信封 | `{ code, message, request_id, data }` | `{ code, message, data }`（**无 request_id**） |
-| 鉴权 | Bearer + service-id + user-key 分层 | 仅 `x-tdai-service-id`（内网信任） |
-| 错误 message | 三类格式（枚举 / 5 位 code / `CODE: detail`） | 小写英文句子（按 HTTP code 分支） |
-| 分页出参 | `{ items, total, limit, offset }` | `{ items, total }`（无 limit/offset 回显） |
-| ID 前缀 | skill `skl-` 等 | wiki `wiki-`、code-graph `cg-` |
+| envelope | `{ code, message, request_id, data }` | `{ code, message, data }` (**no request_id**) |
+| auth | layered Bearer + service-id + user-key | `x-tdai-service-id` only (internal-network trust) |
+| error message | three formats (enum / 5-digit code / `CODE: detail`) | lowercase English sentence (branch on the HTTP code) |
+| paged response | `{ items, total, limit, offset }` | `{ items, total }` (limit/offset not echoed) |
+| ID prefix | skill `skl-`, etc. | wiki `wiki-`, code-graph `cg-` |
 
-### 4.2 接口计数修正说明
+### 4.2 Endpoint count corrections
 
-| 文件 | 注释声明 | 实际 | 差异 |
+| File | Comment says | Actual | Difference |
 |---|---|---|---|
-| `wiki.ts` | 15 endpoints | 16 | 多 `update-meta` |
-| `code-graph.ts` | 13 endpoints | 14 | 多 `update-meta` |
+| `wiki.ts` | 15 endpoints | 16 | extra `update-meta` |
+| `code-graph.ts` | 13 endpoints | 14 | extra `update-meta` |
 
-### 4.3 幂等约定汇总
+### 4.3 Idempotency summary
 
-| 接口 | 幂等行为 |
+| Endpoint | Idempotent behaviour |
 |---|---|
-| `wiki/create` | 同名同 team 返回已存在记录（200，非报错） |
-| `code-graph/create` | 同 repo_url+branch 返回已存在记录（200） |
-| `llm-binding/set` | 重复 set 覆盖（api_key 不传保留原值） |
-| `wiki/delete`、`code-graph/delete` | 单个失败不整体报错，写入 `failed` 数组 |
+| `wiki/create` | the same name in the same team returns the existing record (200, not an error) |
+| `code-graph/create` | the same repo_url+branch returns the existing record (200) |
+| `llm-binding/set` | a repeated set overwrites (omitting api_key keeps the old value) |
+| `wiki/delete`, `code-graph/delete` | a single failure doesn't fail the whole call; it goes into the `failed` array |
