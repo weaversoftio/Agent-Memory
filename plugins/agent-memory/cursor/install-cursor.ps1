@@ -10,10 +10,10 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install-cursor.ps1
-  powershell -ExecutionPolicy Bypass -File install-cursor.ps1 -Url https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory -PlatformToken <WAIP token>
+  powershell -ExecutionPolicy Bypass -File install-cursor.ps1 -Url https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp -PlatformToken <WAIP token>
 #>
 param(
-  [string]$Url = "https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory",
+  [string]$Url = "https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp",
   [string]$Key,
   [string]$AgentId = "",
   [string]$PlatformToken = "",

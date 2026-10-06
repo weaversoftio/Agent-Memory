@@ -102,14 +102,17 @@ In `~/.cursor/mcp.json`:
 
 ## On WAIP (MCP store)
 
-Published as an `http` MCP store entry (image only, port 8080) with:
+Published as an `http` MCP store entry named `memory-mcp` (image only, port 8080). The store's publish form has no env field, so the hub URL is baked in at build time:
 
-```
-MEMORY_HUB_URL=http://<agent-memory hub service>.<namespace>.svc:8125
-MEMORY_SERVICE_ID=<instance id>
+```bash
+docker build \
+  --build-arg MEMORY_HUB_URL=http://agent-memory-hub.apps.svc.cluster.local:8125 \
+  -t zot.platform.weaversoft.io/apps/agent-memory-mcp:<commit>-waip MemoryMcp
 ```
 
-Clients connect through the platform proxy, `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory/mcp`. The entry's **Connection** tab in the platform UI generates the Claude / Cursor / Codex command with a WAIP service token in `Authorization`. Add your memory key to it as an extra header: `X-Memory-User-Key: <your sk-mem key>`.
+Never name the store entry `agent-memory` (or anything else already used as a Helm release name). WAIP's chart install uninstalls same-name releases in other namespaces, so that name deletes the Agent Memory app itself.
+
+Clients connect through the platform proxy, `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp/mcp`. The entry's **Connection** tab in the platform UI generates the Claude / Cursor / Codex command with a WAIP service token in `Authorization`. Add your memory key to it as an extra header: `X-Memory-User-Key: <your sk-mem key>`.
 
 ## Development
 

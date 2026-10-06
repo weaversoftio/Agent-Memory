@@ -8,7 +8,7 @@
 # Needs python3 (for merging JSON) and curl.
 set -euo pipefail
 
-URL="https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory"; KEY=""; AGENT_ID=""; TOKEN=""; UNINSTALL=0
+URL="https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp"; KEY=""; AGENT_ID=""; TOKEN=""; UNINSTALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2 ;;

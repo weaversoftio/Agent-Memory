@@ -15,7 +15,7 @@ Everything goes through the `agent-memory` entry in the WAIP MCP store with **yo
 | **Memory key** (`sk-mem-…`) | Memory Hub panel, https://agent-memory.platform.weaversoft.io → API Key page |
 | **WAIP token** | WAIP → MCP Store → `agent-memory` → Connection tab |
 
-The server URL is preset to production: `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory`.
+The server URL is preset to production: `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp`.
 
 ## Claude Code
 
