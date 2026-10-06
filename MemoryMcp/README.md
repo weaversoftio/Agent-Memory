@@ -26,6 +26,17 @@ The server is stateless and holds no secrets. Each request carries the caller's 
 
 Edits and deletes only work on agents you own. Skills, wiki and code graph tools are planned next.
 
+### Hook endpoints (save every turn)
+
+MCP tools only run when the model decides to call them. To save every turn and load memory at session start, the coding agent's own hooks forward their JSON input here (same headers as `/mcp`):
+
+| Endpoint | Events | Answer |
+|---|---|---|
+| `POST /hooks/claude-code` | `SessionStart` (adds profile + scene index, or recent facts), `UserPromptSubmit` (saves the prompt to L0), `Stop` (saves `last_assistant_message` to L0) | Claude Code hook JSON |
+| `POST /hooks/cursor` | `sessionStart` (`additional_context`), `beforeSubmitPrompt` (saves `prompt`), `afterAgentResponse` (saves `text`) | Cursor hook JSON; `beforeSubmitPrompt` always answers `{"continue": true}` |
+
+Turns are saved to the session `claude-code-<session_id>` / `cursor-<conversation_id>`, split into ≤8000-character messages, with obvious secrets masked. Hooks always answer 200 so a memory problem never blocks the user. The ready-made client setup is in [`plugins/agent-memory`](../plugins/agent-memory/README.md): a Claude Code plugin and a Cursor installer.
+
 ### Which agent's memory?
 
 1. The tool call's own `agent_id` (plus `team_id` for an agent you don't own)

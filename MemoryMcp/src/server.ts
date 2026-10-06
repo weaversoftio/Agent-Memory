@@ -14,6 +14,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { McpConfig } from "./config.js";
 import { HubClient } from "./hub.js";
 import { registerChatMemoryTools } from "./tools.js";
+import { handleHook, type HookClient } from "./hooks.js";
 
 export const SERVER_NAME = "agent-memory";
 export const SERVER_VERSION = "0.1.0";
@@ -58,6 +59,38 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
 
     if (req.method === "GET" && (path === "/healthz" || path === "/health")) {
       return sendJson(res, 200, { status: "ok", name: SERVER_NAME, version: SERVER_VERSION });
+    }
+
+    if (path === "/hooks/claude-code" || path === "/hooks/cursor") {
+      if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
+      const client: HookClient = path === "/hooks/cursor" ? "cursor" : "claude-code";
+      // Hooks always answer 200 with a body the client accepts, so a memory problem never
+      // blocks the user; problems are logged here (and surfaced once as a Claude Code warning).
+      const safe = client === "cursor" ? { continue: true } : {};
+      const userKey = userKeyFrom(req);
+      if (!userKey) {
+        return sendJson(res, 200, client === "claude-code" ? { systemMessage: "Agent Memory: no memory key configured, so this conversation isn't being saved." } : safe);
+      }
+      let input: unknown;
+      try {
+        input = await readBody(req);
+      } catch {
+        return sendJson(res, 200, safe);
+      }
+      const hub = new HubClient({
+        baseUrl: config.hubUrl,
+        serviceId: header(req, "x-memory-service-id") ?? config.serviceId,
+        userKey,
+        timeoutMs: config.timeoutMs,
+        fetchImpl,
+      });
+      const out = await handleHook(client, input, {
+        hub,
+        identityCacheMs: config.identityCacheMs,
+        defaultTarget: { agentId: header(req, "x-memory-agent-id"), teamId: header(req, "x-memory-team-id") },
+        log: (m) => console.warn(m),
+      });
+      return sendJson(res, 200, out);
     }
 
     if (path !== "/mcp" && path !== "/") return sendJson(res, 404, { error: "not found" });
