@@ -1685,9 +1685,15 @@ export class VectorStore implements IMemoryStore {
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
+      // Lookup by primary key (atomic/update's ownership check, dedup version reads).
+      // Without this, a recordIds query returned every record.
+      if (filter?.recordIds && filter.recordIds.length > 0) {
+        const ids = new Set(filter.recordIds);
+        rows = rows.filter((r) => ids.has(r.record_id));
+      }
 
       this.logger?.info(
-        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
+        `${TAG} [L1-query] filter={recordIds=${filter?.recordIds?.length ? filter.recordIds.length : "(all)"}, sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
         `returned ${rows.length} record(s)`,
       );
       return rows;
