@@ -7,16 +7,16 @@
 #                    better-sqlite3 / node-pty)
 #   2. runtime:      slim image with runtime deps + app, tini as PID 1
 #
-# 配置方式: 挂载 config.yaml 到 /data/config.yaml
+# Configuration: mount config.yaml at /data/config.yaml
 #   docker run -v ./config.yaml:/data/config.yaml:ro ...
-# 敏感凭证通过环境变量注入（env 优先级高于配置文件）。
+# Secrets are injected as environment variables (env takes precedence over the config file).
 #
 # Build:
 #   DOCKER_BUILDKIT=1 docker build -t memory-proxy:latest .
 #
-# 说明: 运行时用 tsx 直接执行 TypeScript（不预编译）。tsx 是 devDependency，
-# 因此镜像内保留 dev 依赖；optional 依赖（better-sqlite3 / cos-nodejs-sdk-v5 /
-# cost-guard）保留，用于 sqlite / cos 存储后端与 CostGuard 智能路由。
+# Note: at runtime tsx executes the TypeScript directly (no precompilation). tsx is a devDependency,
+# so the image keeps dev dependencies; the optional dependencies (better-sqlite3 / cos-nodejs-sdk-v5 /
+# cost-guard) are kept for the sqlite / cos storage backends and CostGuard smart routing.
 # ──────────────────────────────────────────────────────────────────────
 
 # ──────────────────────────────────────────────────────────────────────
@@ -24,11 +24,11 @@
 # ──────────────────────────────────────────────────────────────────────
 FROM node:22-slim AS deps-builder
 
-# 使用 Debian 官方 apt 源（deb.debian.org）。如构建缓慢，可在本地构建时替换为镜像源，例如：
+# Uses the official Debian apt source (deb.debian.org). If builds are slow, swap in a mirror for local builds, e.g.:
 #   sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources
 
-# Native build toolchain（better-sqlite3 / node-pty 需要编译）
-# 使用 BuildKit cache mount 缓存 apt 包，避免重复下载
+# Native build toolchain (better-sqlite3 / node-pty need compiling)
+# Cache apt packages with a BuildKit cache mount to avoid downloading them again
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -39,26 +39,26 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净
-# `npm install` 稳定报 `Cannot read properties of null (reading
-# 'edgesOut')`）。升到 11 规避，不影响其它构建行为。
+# node:22-slim ships npm@10.9.8, whose arborist has an "edgesOut" crash (a clean
+# `npm install` reliably fails with `Cannot read properties of null (reading
+# 'edgesOut')`). Upgrading to 11 avoids it without changing anything else in the build.
 RUN npm install -g npm@11 --no-audit --no-fund
 
-# 先复制包元数据以最大化 Docker layer cache。
+# Copy the package metadata first to make the most of the Docker layer cache.
 COPY package.json package-lock.json ./
 
-# npm ≥ 11.21 默认不跑依赖的 install 脚本（allowScripts），better-sqlite3 /
-# node-pty 的原生模块就不会编译，运行时 require 失败。显式放行这两个。
+# npm ≥ 11.21 doesn't run dependencies' install scripts by default (allowScripts), so the native modules of
+# better-sqlite3 / node-pty wouldn't compile and require would fail at runtime. Allow those two explicitly.
 RUN printf 'allow-scripts[]=better-sqlite3\nallow-scripts[]=node-pty\n' > .npmrc
 
-# 安装全部依赖（保留 dev：tsx 运行时需要；保留 optional：sqlite/cos/cost-guard）。
-# 使用 BuildKit npm cache mount 大幅加速重复构建。
+# Install every dependency (keep dev: tsx is needed at runtime; keep optional: sqlite/cos/cost-guard).
+# A BuildKit npm cache mount speeds up repeated builds a lot.
 RUN --mount=type=cache,id=proxy-npm-cache,target=/root/.npm \
     npm install \
         --no-audit \
         --no-fund
 
-# 复制其余源码（.dockerignore 已排除 node_modules/.git/docs/scripts/gateway 等）
+# Copy the rest of the source (.dockerignore already excludes node_modules/.git/docs/scripts/gateway etc.)
 COPY . .
 
 # ──────────────────────────────────────────────────────────────────────
@@ -66,9 +66,9 @@ COPY . .
 # ──────────────────────────────────────────────────────────────────────
 FROM node:22-slim AS runtime
 
-# 使用 Debian 官方 apt 源（deb.debian.org）。如构建缓慢，可自行替换为镜像源。
+# Uses the official Debian apt source (deb.debian.org). If builds are slow, swap in a mirror yourself.
 
-# Runtime essentials only（curl 供 HEALTHCHECK；tini 负责信号处理）
+# Runtime essentials only (curl for HEALTHCHECK; tini handles signals)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -78,36 +78,36 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# 非 root 运行（安全基线）
+# Run as non-root (security baseline)
 RUN groupadd -r app && useradd -r -g app -u 10001 -m app
 
-# 从 builder 拷贝整个 /app（含 node_modules 里指向 packages/cost-guard 的 file: 软链）
-# --chown 在拷贝时设属主，避免对整个 node_modules 再跑一遍 chown -R（很慢且多一层）
+# Copy the whole /app from the builder (including the file: symlink in node_modules pointing at packages/cost-guard)
+# --chown sets the owner while copying, avoiding another chown -R over all of node_modules (slow and an extra layer)
 COPY --from=deps-builder --chown=app:app /app /app
 
-# 数据 / 日志目录（可作为 K8s PVC 挂载）
+# Data / log directories (can be mounted as K8s PVCs)
 RUN mkdir -p /data/tdai-memory-proxy /data/config /app/logs && \
     chown -R app:app /data /app/logs
 
 USER app
 
 # ── Runtime configuration ──
-# 配置文件路径: 挂载 yaml 到 /data/config.yaml
-# 敏感凭证通过环境变量注入（env 优先级高于配置文件）
+# Config file path: mount the yaml at /data/config.yaml
+# Secrets are injected as environment variables (env takes precedence over the config file)
 ENV NODE_ENV=production \
     PROXY_DB_PATH=/data/tdai-memory-proxy/proxy.db \
     NODE_OPTIONS="--max-old-space-size=1536"
 
 EXPOSE 8096
 
-# K8s-friendly health check（liveness/readiness 仍建议在 Deployment 单独定义，
-# 这里是本地运行时兜底）。
+# K8s-friendly health check (liveness/readiness should still be defined separately in the Deployment;
+# this is a local runtime fallback).
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD curl -fsS http://127.0.0.1:8096/health || exit 1
 
-# tini 作 PID 1，使 SIGTERM/SIGKILL 干净传给 Node 及其子进程，并回收僵尸进程。
-# tsx 是运行时依赖，可直接执行 TypeScript。
+# tini as PID 1 passes SIGTERM/SIGKILL cleanly to Node and its children and reaps zombie processes.
+# tsx is a runtime dependency and executes TypeScript directly.
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "--import", "tsx/esm", "src/index.ts"]
 
-# 默认配置文件路径（可被 docker run 追加参数覆盖）
+# Default config file path (can be overridden by extra docker run arguments)
 CMD ["--config", "/data/config.yaml"]

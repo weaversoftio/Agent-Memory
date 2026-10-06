@@ -1,13 +1,13 @@
-# Dockerfile.local 专用忽略清单（BuildKit：<dockerfile>.dockerignore 优先于根 .dockerignore）
-# 目的：缩小构建上下文，并避免把宿主机产物拷进镜像
-#   —— 尤其是 node_modules（better-sqlite3 原生二进制按宿主机平台编译，入镜像会崩，
-#      镜像内会重新 npm install 重编），以及 data/（含真实用户 SQLite 数据）。
+# Ignore list just for Dockerfile.local (BuildKit: <dockerfile>.dockerignore takes precedence over the root .dockerignore)
+# Purpose: shrink the build context and keep host build output out of the image
+#   especially node_modules (better-sqlite3's native binary is compiled for the host platform and crashes in the image;
+#   the image runs npm install again and recompiles), and data/ (contains real user SQLite data).
 
-# 依赖（镜像内重新安装）
+# dependencies (reinstalled in the image)
 **/node_modules
 .pnpm-store/
 
-# 构建产物（镜像内重新构建）
+# build output (rebuilt in the image)
 **/dist
 **/build
 **/*.js.map
@@ -15,9 +15,9 @@
 frontend/src/**/*.js
 frontend/src/**/*.js.map
 
-# 环境与本地数据（禁止入镜像）
-# ⚠️ config/*.json 含真实 kernel api_key（bearer token），必须通过运行时挂载或
-#    K8s Secret 注入，绝不能打进镜像。运行时映射示例：
+# environment and local data (never in the image)
+# ⚠️ config/*.json contains the real kernel api_key (bearer token); it must be mounted at runtime or
+#    injected from a K8s Secret, never baked into the image. Runtime mapping example:
 #      -v /path/to/metadata-instances.json:/app/config/metadata-instances.json:ro
 .env
 .env.*
@@ -30,14 +30,14 @@ data/
 **/*.db-wal
 **/*.sqlite
 
-# 日志 / 覆盖率 / e2e 输出
+# logs / coverage / e2e output
 **/logs
 **/*.log
 coverage/
 frontend/test-results/
 frontend/playwright-report/
 
-# 版本控制与工具元数据
+# version control and tool metadata
 .git
 .gitignore
 .idea/
@@ -45,22 +45,22 @@ frontend/playwright-report/
 .iwiki
 .codebuddy
 
-# OS / 编辑器杂项
+# OS / editor clutter
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
 *~
 
-# 临时目录
+# temporary directories
 tmp/
 .tmp/
 
-# 文档不参与运行（可选，进一步瘦身上下文）
+# docs aren't used at runtime (optional, shrinks the context further)
 docs/
 
-# 测试脚本不参与 runtime（shell 里硬编码内部路径 `/root/git.woa.com/cloud_nosql/tdai`，
-# 打进镜像会泄漏内部 GitLab 域名与部署习惯）
+# test scripts aren't used at runtime (the shell scripts hard-code the internal path `/root/git.woa.com/cloud_nosql/tdai`;
+# baking them into the image would leak the internal GitLab domain and deployment habits)
 tests/
 **/*.e2e.sh
 e2e-*.sh
