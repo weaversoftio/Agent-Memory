@@ -1,6 +1,6 @@
 {
   "name": "agent-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Team memory for Claude Code: search, add, edit and delete memory through the memory MCP, save every turn to the agent's raw history (L0), and load the agent's profile and scenes at session start.",
   "author": {
     "name": "Weaversoft"
@@ -16,8 +16,8 @@
     "memory_url": {
       "type": "string",
       "title": "Memory server URL",
-      "description": "Base URL of the memory MCP server, without /mcp. Local stack: http://localhost:8097. WAIP: the agent-memory URL from the MCP store's Connection tab, without the trailing /mcp.",
-      "default": "http://localhost:8097",
+      "description": "Base URL of the memory server, without /mcp. Production (WAIP): https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory. Local stack: http://localhost:8097.",
+      "default": "https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory",
       "required": true
     },
     "memory_key": {
@@ -35,8 +35,8 @@
     },
     "platform_token": {
       "type": "string",
-      "title": "WAIP token (WAIP only)",
-      "description": "Only when the memory server is reached through WAIP: the service token from the MCP store's Connection tab. Leave empty for a local server.",
+      "title": "WAIP token",
+      "description": "Your WAIP service token from the agent-memory entry's Connection tab in the WAIP MCP store. Needed for production; leave empty only for a local server.",
       "sensitive": true
     }
   }

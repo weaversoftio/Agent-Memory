@@ -8,7 +8,7 @@
 # Needs python3 (for merging JSON) and curl.
 set -euo pipefail
 
-URL="http://localhost:8097"; KEY=""; AGENT_ID=""; TOKEN=""; UNINSTALL=0
+URL="https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory"; KEY=""; AGENT_ID=""; TOKEN=""; UNINSTALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2 ;;
@@ -23,6 +23,9 @@ done
 command -v python3 >/dev/null || { echo "python3 is needed to update Cursor's JSON files." >&2; exit 1; }
 if [ "$UNINSTALL" = 0 ] && [ -z "$KEY" ]; then
   read -r -p "Your memory key (sk-mem-..., from the Memory Hub panel's API Key page): " KEY
+fi
+if [ "$UNINSTALL" = 0 ] && [ -z "$TOKEN" ] && ! printf '%s' "$URL" | grep -Eq '://(localhost|127\.0\.0\.1)'; then
+  read -r -p "WAIP token (from the agent-memory entry's Connection tab in the WAIP MCP store): " TOKEN
 fi
 
 mkdir -p "$HOME/.cursor"

@@ -13,7 +13,7 @@
   powershell -ExecutionPolicy Bypass -File install-cursor.ps1 -Url https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory -PlatformToken <WAIP token>
 #>
 param(
-  [string]$Url = "http://localhost:8097",
+  [string]$Url = "https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/agent-memory",
   [string]$Key,
   [string]$AgentId = "",
   [string]$PlatformToken = "",
@@ -75,6 +75,9 @@ if ($Uninstall) {
 if (-not $Key) { $Key = Read-Host "Your memory key (sk-mem-..., from the Memory Hub panel's API Key page)" }
 if ($Key -notlike "sk-mem-*") { throw "That doesn't look like a memory key; it should start with sk-mem-." }
 $base = $Url.TrimEnd("/")
+if (-not $PlatformToken -and $base -notmatch "://(localhost|127\.0\.0\.1)") {
+  $PlatformToken = Read-Host "WAIP token (from the agent-memory entry's Connection tab in the WAIP MCP store)"
+}
 
 $headers = [ordered]@{ "X-Memory-User-Key" = $Key }
 if ($AgentId) { $headers["X-Memory-Agent-Id"] = $AgentId }
