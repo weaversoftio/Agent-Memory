@@ -39,6 +39,15 @@ function fakeHub(agents: Array<{ team_id: string; agent_id: string; name: string
         return ok({ layer: body.layer, items: [], total: 0 });
       case "chat-memory/layer-delete":
         return ok({ deleted_count: (body.ids as string[]).length });
+      case "auth/waip/exchange": {
+        const assertion = new Headers(init?.headers).get("x-waip-identity");
+        if (assertion === "signed-for-dana") return ok({ user_key: KEY, user: { user_id: "usr-1", username: "dana" } });
+        return new Response(JSON.stringify({
+          code: 403,
+          message: '"dyze" has an Agent Memory account that isn\'t linked to WeaverAI yet: sign in to the Agent Memory panel once with WeaverAI and link it',
+          data: { error: "WAIP_IDENTITY_NOT_LINKED" },
+        }), { status: 403 });
+      }
       default:
         return new Response(JSON.stringify({ code: 404, message: "NOT_FOUND", data: null }), { status: 404 });
     }
@@ -143,6 +152,38 @@ describe("memory MCP server", () => {
     const client = await connect({ authorization: `Bearer ${KEY}` });
     const result = await client.callTool({ name: "memory_whoami", arguments: {} });
     expect(textOf(result)).toContain("dana");
+    await client.close();
+  });
+
+  it("acts as the WeaverAI user the MCP proxy vouches for, with no key of their own", async () => {
+    const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
+    await start(hub.fetchImpl);
+    const client = await connect({ "x-waip-identity": "signed-for-dana" });
+    const result = await client.callTool({ name: "memory_add", arguments: { content: "We deploy on Thursdays." } });
+    expect(textOf(result)).toContain("m_1_abc");
+    const add = hub.calls.find((c) => c.path === "chat-memory/layer-add")!;
+    expect(add.headers["x-tdai-user-key"]).toBe(KEY);
+    await client.close();
+  });
+
+  it("tells the agent why a WeaverAI identity was refused", async () => {
+    const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
+    await start(hub.fetchImpl);
+    const client = await connect({ "x-waip-identity": "signed-for-dyze" });
+    const result = await client.callTool({ name: "memory_whoami", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("link it");
+    expect(hub.calls.filter((c) => c.path !== "auth/waip/exchange")).toHaveLength(0);
+    await client.close();
+  });
+
+  it("an explicit memory key wins over the proxy's identity", async () => {
+    const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
+    await start(hub.fetchImpl);
+    const client = await connect({ "x-memory-user-key": KEY, "x-waip-identity": "signed-for-dyze" });
+    const result = await client.callTool({ name: "memory_whoami", arguments: {} });
+    expect(textOf(result)).toContain("dana");
+    expect(hub.calls.some((c) => c.path === "auth/waip/exchange")).toBe(false);
     await client.close();
   });
 

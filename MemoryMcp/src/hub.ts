@@ -28,6 +28,40 @@ export interface HubClientOptions {
   userKey: string;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+  /** Why there is no key, when it's not simply missing (e.g. the WeaverAI identity was refused). */
+  noKeyReason?: string;
+}
+
+const MISSING_KEY =
+  "Missing memory key: connect through the WeaverAI MCP proxy with your WeaverAI token, or add your sk-mem key as the X-Memory-User-Key header in your MCP config.";
+
+/**
+ * Exchanges the WeaverAI MCP proxy's signed caller identity (X-WAIP-Identity) for the
+ * caller's own Agent Memory user_key. The hub verifies the assertion; this server trusts
+ * nothing in it. Throws HubError with the hub's reason when it's refused.
+ */
+export async function exchangeWaipIdentity(opts: {
+  baseUrl: string;
+  serviceId: string;
+  assertion: string;
+  timeoutMs: number;
+  fetchImpl?: typeof fetch;
+}): Promise<string> {
+  let res: Response;
+  try {
+    res = await (opts.fetchImpl ?? fetch)(`${opts.baseUrl}/api/v1/auth/waip/exchange`, {
+      method: "POST",
+      headers: { "x-tdai-service-id": opts.serviceId, "x-waip-identity": opts.assertion },
+      signal: AbortSignal.timeout(opts.timeoutMs),
+    });
+  } catch (err) {
+    throw new HubError(503, `Memory Hub is unreachable (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const env = (await res.json().catch(() => null)) as Envelope<{ user_key?: string }> | null;
+  if (!env || env.code !== 0 || !env.data?.user_key) {
+    throw new HubError(env?.code || res.status || 502, env?.message || `WeaverAI identity exchange failed (HTTP ${res.status})`);
+  }
+  return env.data.user_key;
 }
 
 export class HubClient {
@@ -48,7 +82,7 @@ export class HubClient {
   /** POST /api/v1/{path}; returns `data` on code 0, throws HubError otherwise. */
   async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
     if (!this.opts.userKey) {
-      throw new HubError(401, "Missing memory key: add your sk-mem key as the X-Memory-User-Key header in your MCP config.");
+      throw new HubError(401, this.opts.noKeyReason ?? MISSING_KEY);
     }
     const url = `${this.opts.baseUrl}/api/v1/${path.replace(/^\/+/, "")}`;
     let res: Response;

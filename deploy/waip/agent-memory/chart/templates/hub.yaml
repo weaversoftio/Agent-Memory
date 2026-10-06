@@ -109,6 +109,15 @@ spec:
             # Creating SSO accounts needs the admin's user_key (the instance api_key is a placeholder).
             - name: PANEL_AUTH_ADMIN_USER_KEY_FILE
               value: /var/run/secrets/agent-memory-admin/user-key
+            {{- with .Values.auth.waipIdentity.jwksUrl }}
+            # Agents behind the WAIP MCP proxy act as the WAIP user it vouches for (X-WAIP-Identity).
+            - name: PANEL_AUTH_WAIP_JWKS_URL
+              value: {{ . | quote }}
+            - name: PANEL_AUTH_WAIP_ISSUER
+              value: {{ $.Values.auth.waipIdentity.issuer | quote }}
+            - name: PANEL_AUTH_WAIP_AUDIENCE
+              value: {{ $.Values.auth.waipIdentity.audience | quote }}
+            {{- end }}
             # SSO identity links and the key that encrypts them must survive restarts (the root fs is read-only).
             - name: PANEL_AUTH_IDENTITY_STORE_PATH
               value: /data/knowledge/panel-auth/identities.json

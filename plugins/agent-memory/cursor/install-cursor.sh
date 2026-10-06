@@ -21,11 +21,13 @@ while [ $# -gt 0 ]; do
 done
 
 command -v python3 >/dev/null || { echo "python3 is needed to update Cursor's JSON files." >&2; exit 1; }
-if [ "$UNINSTALL" = 0 ] && [ -z "$KEY" ]; then
+# Production identifies you by your WAIP token; only a local server needs the memory key.
+if printf '%s' "$URL" | grep -Eq '://(localhost|127\.0\.0\.1)'; then LOCAL=1; else LOCAL=0; fi
+if [ "$UNINSTALL" = 0 ] && [ "$LOCAL" = 1 ] && [ -z "$KEY" ]; then
   read -r -p "Your memory key (sk-mem-..., from the Memory Hub panel's API Key page): " KEY
 fi
-if [ "$UNINSTALL" = 0 ] && [ -z "$TOKEN" ] && ! printf '%s' "$URL" | grep -Eq '://(localhost|127\.0\.0\.1)'; then
-  read -r -p "WAIP token (from the agent-memory entry's Connection tab in the WAIP MCP store): " TOKEN
+if [ "$UNINSTALL" = 0 ] && [ "$LOCAL" = 0 ] && [ -z "$TOKEN" ]; then
+  read -r -p "Your WAIP token (from the memory-mcp entry's Connection tab in the WAIP MCP store): " TOKEN
 fi
 
 mkdir -p "$HOME/.cursor"
@@ -53,10 +55,10 @@ if os.environ["UNINSTALL"] == "1":
     mcp["mcpServers"].pop("agent-memory", None)
 else:
     key = os.environ["KEY"]
-    if not key.startswith("sk-mem-"):
+    if key and not key.startswith("sk-mem-"):
         raise SystemExit("That doesn't look like a memory key; it should start with sk-mem-.")
     base = os.environ["URL"].rstrip("/")
-    headers = {"X-Memory-User-Key": key}
+    headers = {"X-Memory-User-Key": key} if key else {}
     if os.environ["AGENT_ID"]: headers["X-Memory-Agent-Id"] = os.environ["AGENT_ID"]
     if os.environ["TOKEN"]: headers["Authorization"] = f"Bearer {os.environ['TOKEN']}"
     mcp["mcpServers"]["agent-memory"] = {"url": f"{base}/mcp", "headers": headers}

@@ -149,7 +149,19 @@ export interface PanelAuthConfig {
   appUrl: string;
   /** File holding the admin's user_key, for admin-only calls when the instance api_key isn't one; empty = use api_key. */
   adminUserKeyFile: string;
+  waip: PanelWaipIdentityConfig;
   oidc: PanelOidcConfig;
+}
+
+/**
+ * Signed caller identity from the WAIP MCP proxy (X-WAIP-Identity): lets MCP servers act
+ * as the WeaverAI user calling them, without a user_key. Off when jwksUrl is empty.
+ */
+export interface PanelWaipIdentityConfig {
+  jwksUrl: string;
+  issuer: string;
+  /** "mcp:<MCP store entry name>": only assertions minted for this MCP are accepted. */
+  audience: string;
 }
 
 export interface PanelOidcConfig {
@@ -252,6 +264,11 @@ function buildAuthConfig(): PanelAuthConfig {
     },
     appUrl: appUrl.replace(/\/+$/, ''),
     adminUserKeyFile: env('PANEL_AUTH_ADMIN_USER_KEY_FILE', ''),
+    waip: {
+      jwksUrl: env('PANEL_AUTH_WAIP_JWKS_URL', ''),
+      issuer: env('PANEL_AUTH_WAIP_ISSUER', 'weaverai-platform'),
+      audience: env('PANEL_AUTH_WAIP_AUDIENCE', 'mcp:memory-mcp'),
+    },
     oidc: buildOidcConfig(oidcEnabled),
   };
 }

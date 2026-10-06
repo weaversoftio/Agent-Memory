@@ -15,6 +15,7 @@ const PUBLIC_ISSUER = 'https://auth.example.com/realms/acme';
 const INTERNAL_ISSUER = 'http://keycloak.platform.svc/realms/acme';
 const APP_URL = 'https://memory.example.com';
 const ADMIN_KEY = 'sk-mem-admin-key-0001';
+const PLATFORM_JWKS = 'http://platform.test/api/auth/jwks.json';
 /** Like production: the instance api_key is a placeholder, the admin key comes from a mounted file. */
 const PLACEHOLDER_API_KEY = 'local';
 const ADMIN_ONLY = new Set([
@@ -99,6 +100,27 @@ async function fakeIdp() {
     setAudience(value: string) {
       audience = value;
     },
+  };
+}
+
+/** Fake WAIP platform: publishes its JWKS and mints X-WAIP-Identity assertions like the MCP proxy. */
+async function fakePlatform() {
+  const { privateKey, publicKey } = await generateKeyPair('RS256');
+  const jwk = { ...(await exportJWK(publicKey)), kid: 'p1', alg: 'RS256', use: 'sig' };
+  const foreign = (await generateKeyPair('RS256')).privateKey;
+  return {
+    jwks: { keys: [jwk] },
+    assertion(username: string, opts: { audience?: string; issuer?: string; key?: CryptoKey } = {}) {
+      return new SignJWT({ preferred_username: username, email: `${username}@example.com` })
+        .setProtectedHeader({ alg: 'RS256', kid: 'p1' })
+        .setIssuer(opts.issuer ?? 'weaverai-platform')
+        .setAudience(opts.audience ?? 'mcp:memory-mcp')
+        .setSubject(username)
+        .setIssuedAt()
+        .setExpirationTime('2m')
+        .sign(opts.key ?? privateKey);
+    },
+    foreign,
   };
 }
 
@@ -196,6 +218,7 @@ function authConfig(dir: string, overrides: Partial<PanelAuthConfig['oidc']> = {
     },
     appUrl: APP_URL,
     adminUserKeyFile: adminKeyFile,
+    waip: { jwksUrl: PLATFORM_JWKS, issuer: 'weaverai-platform', audience: 'mcp:memory-mcp' },
     oidc: {
       enabled: true,
       id: 'keycloak',
@@ -215,14 +238,19 @@ function authConfig(dir: string, overrides: Partial<PanelAuthConfig['oidc']> = {
 }
 
 let idp: Awaited<ReturnType<typeof fakeIdp>>;
+let platform: Awaited<ReturnType<typeof fakePlatform>>;
 let core: ReturnType<typeof fakeCore>;
 let service: PanelAuthService;
 
 beforeEach(async () => {
   idp = await fakeIdp();
+  platform = await fakePlatform();
   core = fakeCore();
-  // The service builds its OidcProvider with the global fetch.
-  vi.stubGlobal('fetch', idp.fetchImpl);
+  // The service builds its OidcProvider (and the WAIP key set) with the global fetch.
+  vi.stubGlobal('fetch', (async (input, init) =>
+    String(input) === PLATFORM_JWKS
+      ? new Response(JSON.stringify(platform.jwks), { headers: { 'content-type': 'application/json' } })
+      : idp.fetchImpl(input, init)) as typeof fetch);
   service = new PanelAuthService({
     config: authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))),
     instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
@@ -256,6 +284,60 @@ describe('OidcProvider', () => {
 
   it('refuses to start without its client secret', () => {
     expect(() => new OidcProvider({ ...authConfig('.').oidc, clientSecret: '' })).toThrow(/CLIENT_SECRET/);
+  });
+});
+
+describe('WAIP identity exchange (MCP servers behind the WAIP MCP proxy)', () => {
+  it('a new person gets an account (default team, member) and the same key every time', async () => {
+    const first = await service.exchangeWaipIdentity('default', await platform.assertion('noa.levi'));
+    const created = core.users.find((u) => u.username === 'noa-levi')!;
+    expect(created).toMatchObject({ external_id: 'noa.levi', auth_provider: 'keycloak' });
+    expect(first.userKey).toBe(created.key);
+    expect(core.members).toEqual([{ team_id: core.teams[0].team_id, user_id: created.user_id, role: 'member' }]);
+
+    const again = await service.exchangeWaipIdentity('default', await platform.assertion('noa.levi'));
+    expect(again.userKey).toBe(created.key);
+    expect(core.users.filter((u) => u.username === 'noa-levi')).toHaveLength(1);
+  });
+
+  it('someone who linked their account with SSO gets their own key', async () => {
+    core.users.push({ user_id: 'usr-dyze', username: 'dyze', key: 'sk-mem-dyze-existing', auth_provider: 'local', user_type: 'normal' });
+    const r = await signIn({ preferred_username: 'dyze' });
+    if (r.kind !== 'pending') throw new Error('expected pending');
+    await service.completePendingWoaLogin({ token: r.pending.token, username: 'dyze', userKey: 'sk-mem-dyze-existing' });
+
+    const out = await service.exchangeWaipIdentity('default', await platform.assertion('dyze'));
+    expect(out).toMatchObject({ userKey: 'sk-mem-dyze-existing', user: { user_id: 'usr-dyze' } });
+  });
+
+  it('an existing account not yet linked to WeaverAI is never claimed by an agent', async () => {
+    core.users.push({ user_id: 'usr-dyze', username: 'dyze', key: 'sk-mem-dyze-existing', auth_provider: 'local', user_type: 'normal' });
+    await expect(service.exchangeWaipIdentity('default', await platform.assertion('dyze')))
+      .rejects.toMatchObject({ code: 'WAIP_IDENTITY_NOT_LINKED', status: 403 });
+    expect(core.users).toHaveLength(2);
+  });
+
+  it('rejects assertions for another MCP, from another issuer, or not signed by the platform', async () => {
+    for (const bad of [
+      await platform.assertion('mallory', { audience: 'mcp:some-other-mcp' }),
+      await platform.assertion('mallory', { issuer: 'someone-else' }),
+      await platform.assertion('mallory', { key: platform.foreign }),
+      'not-a-jwt',
+    ]) {
+      await expect(service.exchangeWaipIdentity('default', bad)).rejects.toMatchObject({ code: 'WAIP_IDENTITY_INVALID' });
+    }
+    expect(core.users).toHaveLength(1);
+  });
+
+  it('is off without a JWKS URL', async () => {
+    const off = new PanelAuthService({
+      config: { ...authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))), waip: { jwksUrl: '', issuer: 'weaverai-platform', audience: 'mcp:memory-mcp' } },
+      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
+      metaKernel: core.kernel,
+      logger: silentLogger,
+    });
+    await expect(off.exchangeWaipIdentity('default', await platform.assertion('noa')))
+      .rejects.toMatchObject({ code: 'WAIP_IDENTITY_DISABLED' });
   });
 });
 

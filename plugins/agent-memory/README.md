@@ -6,14 +6,18 @@ Connects your coding agent to the team's Agent Memory while it keeps its own mod
 - **Every turn saved:** your message and the agent's reply go to your agent's raw history (L0), and the memory pipeline extracts facts from them in the background
 - **Memory at session start:** each new chat starts with your agent's profile and scene list (or its most recent facts)
 
-Everything goes through the `agent-memory` entry in the WAIP MCP store with **your own** memory key, so you only reach memory you're allowed to see. Obvious secrets (API keys, tokens, private keys) are masked before anything is saved.
+Everything goes through the `memory-mcp` entry in the WAIP MCP store as **you**, so you only reach memory you're allowed to see. Obvious secrets (API keys, tokens, private keys) are masked before anything is saved.
 
-## Before you start: two values
+## Before you start
 
 | Value | Where to get it |
 |---|---|
-| **Memory key** (`sk-mem-…`) | Memory Hub panel, https://agent-memory.platform.weaversoft.io → API Key page |
-| **WAIP token** | WAIP → MCP Store → `agent-memory` → Connection tab |
+| **WAIP token** | WAIP → MCP Store → `memory-mcp` → Connection tab. Create your own: it tells Agent Memory who you are. |
+| **Memory key** (`sk-mem-…`), only if needed | Memory Hub panel, https://agent-memory.platform.weaversoft.io → API Key page |
+
+With the WAIP token alone, WAIP vouches for you to Agent Memory (a signed identity on every call), and Agent Memory uses your account: the one you linked when you first signed in to the panel with WeaverAI, or a new one in the `weaversoft` team. If you have an older Agent Memory account, sign in to the panel once with WeaverAI and link it first, or agents get an "isn't linked yet" error.
+
+Until the WAIP platform update that sends this identity is deployed, also paste your memory key. A local server always needs it.
 
 The server URL is preset to production: `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp`.
 
@@ -26,7 +30,7 @@ In Claude Code:
 /plugin install agent-memory@weaversoft
 ```
 
-When asked, keep the server URL as it is, paste your memory key and your WAIP token, and leave agent ID empty unless you own more than one agent. The key and token go into your system's secure credential store.
+When asked, keep the server URL as it is, paste your WAIP token (and your memory key only if you need it, see above), and leave agent ID empty unless you own more than one agent. They go into your system's secure credential store.
 
 Restart Claude Code. `/mcp` should list `agent-memory`, and `/hooks` shows the three hooks. Updates: `/plugin marketplace update weaversoft`.
 
@@ -48,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/weaversoftio/Agent-Memory/main/plug
 bash /tmp/install-cursor.sh
 ```
 
-It asks for your memory key and WAIP token. If you own more than one agent, add `-AgentId <id>` (`--agent-id <id>` on macOS).
+It asks for your WAIP token. Add `-Key <sk-mem-…>` (`--key` on macOS) if you need your memory key, and `-AgentId <id>` (`--agent-id <id>`) if you own more than one agent.
 
 Restart Cursor. Settings → MCP should show `agent-memory` as connected.
 
@@ -74,9 +78,9 @@ Claude Code / Cursor ──(own login)──> its usual model
    ├─ MCP tools ──────────────┐  (the model decides)
    └─ hooks ──────────────────┤  (every turn, always)
                               ▼
-   WAIP MCP proxy (WAIP token) ──> memory-mcp  /mcp  /hooks/claude-code  /hooks/cursor
+   WAIP MCP proxy (your WAIP token → signed X-WAIP-Identity) ──> memory-mcp  /mcp  /hooks/*
                               ▼
-   Memory Hub panel API (your memory key, your permissions) ──> memory-core L0 → L1 → L2 → L3
+   Memory Hub panel API (verifies the identity → your key, your permissions) ──> memory-core L0 → L1 → L2 → L3
 ```
 
 | Moment | Claude Code hook | Cursor hook | What happens |
@@ -89,4 +93,4 @@ Saving runs in the background in Claude Code and never blocks a prompt in Cursor
 
 ## Local development
 
-Against the local Docker stack (`deploy/global-images` plus a `tdai-memory-mcp` container on port 8097), set the server URL to `http://localhost:8097` and leave the WAIP token empty. In Claude Code you can install from a checkout with `/plugin marketplace add <path to Agent-Memory>`; the Cursor installers take `-Url http://localhost:8097` (`--url`).
+Against the local Docker stack (`deploy/global-images` plus a `tdai-memory-mcp` container on port 8097), set the server URL to `http://localhost:8097`, leave the WAIP token empty and set your memory key. In Claude Code you can install from a checkout with `/plugin marketplace add <path to Agent-Memory>`; the Cursor installers take `-Url http://localhost:8097` (`--url`).

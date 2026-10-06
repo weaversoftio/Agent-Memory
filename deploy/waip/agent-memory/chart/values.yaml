@@ -37,6 +37,12 @@ auth:
     clientSecretName: agent-memory-oidc   # existing Secret with key client-secret, never committed
     defaultTeam: ""          # team new SSO accounts join (created on first use); empty = none
     defaultRole: member
+  # The WAIP MCP proxy's signed caller identity (X-WAIP-Identity), so agents act as their
+  # WAIP user without an sk-mem key. Needs auth.oidc (accounts are the SSO accounts).
+  waipIdentity:
+    jwksUrl: ""              # the platform's /api/auth/jwks.json, in-cluster; empty = off
+    issuer: weaverai-platform
+    audience: mcp:memory-mcp # "mcp:<MCP store entry name>"
 
 storage:
   className: mayastor-1rep-wait

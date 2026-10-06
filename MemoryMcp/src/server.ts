@@ -2,9 +2,11 @@
  * Stateless streamable-HTTP MCP server.
  *
  * Each POST /mcp builds a fresh McpServer bound to the caller's memory key, so no
- * state is shared between users or requests. The key arrives in a header:
- *   X-Memory-User-Key: sk-mem-...      (works behind the WAIP mcp-proxy, which strips Authorization)
- *   Authorization: Bearer sk-mem-...   (fallback for direct local connections)
+ * state is shared between users or requests. The caller is identified by, in order:
+ *   X-Memory-User-Key: sk-mem-...      (an explicit key always wins)
+ *   Authorization: Bearer sk-mem-...   (direct local connections)
+ *   X-WAIP-Identity: <jwt>             (set by the WeaverAI MCP proxy for its signed-in user;
+ *                                       the hub verifies it and returns that person's key)
  * Optional headers: X-Memory-Agent-Id / X-Memory-Team-Id (default agent),
  * X-Memory-Service-Id (memory instance, defaults to MEMORY_SERVICE_ID).
  */
@@ -12,12 +14,12 @@ import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpConfig } from "./config.js";
-import { HubClient } from "./hub.js";
+import { HubClient, exchangeWaipIdentity } from "./hub.js";
 import { registerChatMemoryTools } from "./tools.js";
 import { handleHook, type HookClient } from "./hooks.js";
 
 export const SERVER_NAME = "agent-memory";
-export const SERVER_VERSION = "0.1.1";
+export const SERVER_VERSION = "0.2.0";
 
 const INSTRUCTIONS =
   "Agent Memory: the team's shared long-term memory for this agent. Search it (memory_search) before answering questions about past decisions, conventions or project facts. When the user states a durable fact, decision or preference, save it with memory_add as one standalone sentence. Never save secrets or credentials.";
@@ -34,6 +36,30 @@ export function userKeyFrom(req: http.IncomingMessage): string | undefined {
   const auth = header(req, "authorization");
   const m = auth?.match(/^Bearer\s+(sk-mem-\S+)$/i);
   return m?.[1];
+}
+
+/** The caller's memory key, from an explicit header or by exchanging the WAIP proxy's identity. */
+async function resolveUserKey(
+  req: http.IncomingMessage,
+  config: McpConfig,
+  fetchImpl?: typeof fetch,
+): Promise<{ userKey: string; noKeyReason?: string }> {
+  const explicit = userKeyFrom(req);
+  if (explicit) return { userKey: explicit };
+  const assertion = header(req, "x-waip-identity");
+  if (!assertion) return { userKey: "" };
+  try {
+    const userKey = await exchangeWaipIdentity({
+      baseUrl: config.hubUrl,
+      serviceId: header(req, "x-memory-service-id") ?? config.serviceId,
+      assertion,
+      timeoutMs: config.timeoutMs,
+      fetchImpl,
+    });
+    return { userKey };
+  } catch (err) {
+    return { userKey: "", noKeyReason: `Agent Memory: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -67,9 +93,11 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
       // Hooks always answer 200 with a body the client accepts, so a memory problem never
       // blocks the user; problems are logged here (and surfaced once as a Claude Code warning).
       const safe = client === "cursor" ? { continue: true } : {};
-      const userKey = userKeyFrom(req);
+      const { userKey, noKeyReason } = await resolveUserKey(req, config, fetchImpl);
       if (!userKey) {
-        return sendJson(res, 200, client === "claude-code" ? { systemMessage: "Agent Memory: no memory key configured, so this conversation isn't being saved." } : safe);
+        const reason = noKeyReason ?? "Agent Memory: no memory key or WeaverAI identity, so this conversation isn't being saved.";
+        if (noKeyReason) console.warn(noKeyReason);
+        return sendJson(res, 200, client === "claude-code" ? { systemMessage: reason } : safe);
       }
       let input: unknown;
       try {
@@ -103,8 +131,9 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
 
     // Without a key the server still answers the handshake and tools/list (the WAIP MCP store
     // lists tools that way, with no user identity); every tool call then fails with a clear
-    // "missing memory key" error, because the hub client refuses to call the panel.
-    const userKey = userKeyFrom(req) ?? "";
+    // "missing memory key" error (or why the WeaverAI identity was refused), because the hub
+    // client refuses to call the panel.
+    const { userKey, noKeyReason } = await resolveUserKey(req, config, fetchImpl);
 
     let body: unknown;
     try {
@@ -123,6 +152,7 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
       userKey,
       timeoutMs: config.timeoutMs,
       fetchImpl,
+      noKeyReason,
     });
     const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: INSTRUCTIONS });
     registerChatMemoryTools(server, {

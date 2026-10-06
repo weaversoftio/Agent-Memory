@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { Logger } from '../infra/logger.js';
 import type { PanelAuthConfig } from '../config/panel-config.js';
 import { InstanceRegistry } from '../config/instance-registry.js';
@@ -44,6 +45,8 @@ interface OidcStatePayload {
 }
 
 const OIDC_STATE_TTL_MS = 10 * 60 * 1000;
+/** How long a WAIP identity → user resolution is reused before checking core again. */
+const WAIP_IDENTITY_CACHE_MS = 5 * 60 * 1000;
 
 /** Default username from an IdP login name: IdPs allow dots and @, core usernames don't. */
 function usernameFrom(loginName: string): string {
@@ -138,6 +141,8 @@ export class PanelAuthService {
   private readonly providers = new AuthProviderRegistry();
   private readonly consumedPendingWoa = new Set<string>();
   private readonly teamIds = new Map<string, Promise<string>>();
+  private waipKeys: ReturnType<typeof createRemoteJWKSet> | null = null;
+  private readonly waipUsers = new Map<string, { at: number; userKey: string; user: SessionUser }>();
 
   constructor(dependencies: PanelAuthDependencies) {
     const { config, instances, metaKernel, logger } = dependencies;
@@ -290,6 +295,73 @@ export class PanelAuthService {
       if (!(err instanceof PanelAuthError) || err.code !== 'IDENTITY_NOT_BOUND') throw err;
       return { kind: 'pending', pending: this.createPendingToken(saved.instanceId, identity), returnTo: saved.returnTo };
     }
+  }
+
+  /**
+   * MCP servers behind the WAIP MCP proxy: turns the platform's signed caller identity
+   * (X-WAIP-Identity, a short-lived JWT for this MCP only) into that person's user_key.
+   *
+   * The WAIP username is the Keycloak preferred_username, the same id SSO links accounts
+   * by. A person with no Agent Memory account gets one, as on a first SSO sign-in. A person
+   * whose name belongs to an account not yet linked to WeaverAI must link it in the panel
+   * first (signing in once with WeaverAI), so an agent can never claim someone's account.
+   */
+  async exchangeWaipIdentity(
+    instanceId: string,
+    assertion: string,
+    requestId?: string,
+  ): Promise<{ userKey: string; user: SessionUser }> {
+    const cfg = this.config.waip;
+    const provider = this.providers.listByKind('redirect-oauth2')[0];
+    if (!cfg.jwksUrl || !provider) {
+      throw new PanelAuthError('WAIP_IDENTITY_DISABLED', 'WeaverAI identity is not enabled on this Agent Memory', 404);
+    }
+    this.requireInstance(instanceId);
+    let username: string | undefined;
+    let email: string | undefined;
+    try {
+      this.waipKeys ??= createRemoteJWKSet(new URL(cfg.jwksUrl));
+      const { payload } = await jwtVerify(assertion, this.waipKeys, {
+        issuer: cfg.issuer,
+        audience: cfg.audience,
+        algorithms: ['RS256'],
+        clockTolerance: 30,
+        maxTokenAge: '5m',
+      });
+      const claim = payload.preferred_username ?? payload.sub;
+      username = typeof claim === 'string' && claim.trim() ? claim.trim() : undefined;
+      email = typeof payload.email === 'string' ? payload.email : undefined;
+    } catch (err) {
+      throw new PanelAuthError('WAIP_IDENTITY_INVALID', `WeaverAI identity rejected: ${(err as Error).message}`, 401);
+    }
+    if (!username) throw new PanelAuthError('WAIP_IDENTITY_INVALID', 'WeaverAI identity has no username', 401);
+
+    const cacheKey = `${instanceId}/${username}`;
+    const cached = this.waipUsers.get(cacheKey);
+    if (cached && Date.now() - cached.at < WAIP_IDENTITY_CACHE_MS) return { userKey: cached.userKey, user: cached.user };
+
+    const identity: ExternalIdentity = { providerId: provider.id, subject: username, loginName: username, email, claims: {} };
+    let resolved: { userKey: string; user: SessionUser };
+    try {
+      resolved = await this.resolveIdentity(instanceId, identity, requestId);
+    } catch (err) {
+      if (!(err instanceof PanelAuthError) || err.code !== 'IDENTITY_NOT_BOUND') throw err;
+      try {
+        resolved = await this.provisionIdentity({ instanceId, identity, requestId });
+      } catch (provisionErr) {
+        if (provisionErr instanceof PanelAuthError && provisionErr.code === 'USERNAME_TAKEN') {
+          throw new PanelAuthError(
+            'WAIP_IDENTITY_NOT_LINKED',
+            `"${username}" has an Agent Memory account that isn't linked to WeaverAI yet: sign in to the Agent Memory panel once with WeaverAI and link it`,
+            403,
+          );
+        }
+        throw provisionErr;
+      }
+      this.logger.info('account created for a WeaverAI identity', { instanceId, username });
+    }
+    this.waipUsers.set(cacheKey, { at: Date.now(), userKey: resolved.userKey, user: resolved.user });
+    return { userKey: resolved.userKey, user: resolved.user };
   }
 
   /** Where to send the browser after the panel session is gone: the IdP's logout for OIDC sessions, else the panel. */

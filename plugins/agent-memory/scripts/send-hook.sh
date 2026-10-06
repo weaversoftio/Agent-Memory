@@ -5,8 +5,11 @@
 
 url="${CLAUDE_PLUGIN_OPTION_MEMORY_URL:-https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp}"
 args=(-s -m "${AGENT_MEMORY_HOOK_TIMEOUT:-15}" -X POST
-  -H "Content-Type: application/json"
-  -H "X-Memory-User-Key: ${CLAUDE_PLUGIN_OPTION_MEMORY_KEY:-}")
+  -H "Content-Type: application/json")
+# Production identifies you by your WAIP token; only a local server needs the memory key.
+if [ -n "${CLAUDE_PLUGIN_OPTION_MEMORY_KEY:-}" ]; then
+  args+=(-H "X-Memory-User-Key: ${CLAUDE_PLUGIN_OPTION_MEMORY_KEY}")
+fi
 if [ -n "${CLAUDE_PLUGIN_OPTION_AGENT_ID:-}" ]; then
   args+=(-H "X-Memory-Agent-Id: ${CLAUDE_PLUGIN_OPTION_AGENT_ID}")
 fi

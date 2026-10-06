@@ -1,7 +1,7 @@
 description: "TencentDB Agent Memory — shared long-term memory, skills, wiki and code graph for coding agents. Panel (Memory Hub) plus an OpenAI/Anthropic-compatible proxy that agents point their base URL at; memory-core stays internal. SQLite on two PVCs, LLM via LiteLLM."
 
 app_name: "Agent Memory"
-version: "0.1.3"
+version: "0.1.4"
 has_ui: true
 
 # WARNING: never use the bash colon-dash or colon-question forms for any var
@@ -90,6 +90,14 @@ vars:
   SSO_DEFAULT_TEAM:
     description: "Team that new SSO accounts join as members (created on first use)"
     default: "weaversoft"
+    required: false
+  WAIP_IDENTITY_JWKS_URL:
+    description: "Platform public keys for the MCP proxy's signed caller identity (agents act as their WAIP user without an sk-mem key); empty = off"
+    default: "http://weaverai-platform-backend.platform.svc.cluster.local:9000/api/auth/jwks.json"
+    required: false
+  WAIP_IDENTITY_AUDIENCE:
+    description: "mcp:<name of the memory MCP's MCP store entry>"
+    default: "mcp:memory-mcp"
     required: false
   STORAGE_CLASS:
     description: "StorageClass for the two data PVCs"

@@ -14,6 +14,10 @@ function fakeHub(opts: { failImport?: boolean } = {}) {
     const path = new URL(String(input)).pathname.replace("/api/v1/", "");
     const body = JSON.parse(String(init?.body ?? "{}"));
     switch (path) {
+      case "auth/waip/exchange":
+        return new Headers(init?.headers).get("x-waip-identity") === "signed-for-dana"
+          ? ok({ user_key: KEY, user: { user_id: "usr-1", username: "dana" } })
+          : new Response(JSON.stringify({ code: 401, message: "WeaverAI identity rejected: signature verification failed", data: null }), { status: 401 });
       case "meta/auth/verify":
         return ok({ valid: true, user: { user_id: "usr-1", username: "dana" } });
       case "meta/team/list":
@@ -46,10 +50,10 @@ async function start(fetchImpl: typeof fetch) {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-async function hook(client: string, body: unknown, key: string | null = KEY) {
+async function hook(client: string, body: unknown, key: string | null = KEY, extra: Record<string, string> = {}) {
   const res = await fetch(`${base}/hooks/${client}`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(key ? { "x-memory-user-key": key } : {}) },
+    headers: { "content-type": "application/json", ...(key ? { "x-memory-user-key": key } : {}), ...extra },
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, any> };
@@ -86,6 +90,26 @@ describe("Claude Code hooks", () => {
     const { status, body } = await hook("claude-code", { hook_event_name: "Stop", session_id: "s1", last_assistant_message: "x" }, null);
     expect(status).toBe(200);
     expect(body.systemMessage).toContain("no memory key");
+  });
+
+  it("saves turns for the WeaverAI user the MCP proxy vouches for", async () => {
+    const hub = fakeHub();
+    await start(hub.fetchImpl);
+    const { status } = await hook("claude-code", { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: "Hi" }, null, {
+      "x-waip-identity": "signed-for-dana",
+    });
+    expect(status).toBe(200);
+    expect(hub.imports).toHaveLength(1);
+  });
+
+  it("says why when the WeaverAI identity is refused", async () => {
+    const hub = fakeHub();
+    await start(hub.fetchImpl);
+    const { body } = await hook("claude-code", { hook_event_name: "Stop", session_id: "s1", last_assistant_message: "x" }, null, {
+      "x-waip-identity": "forged",
+    });
+    expect(body.systemMessage).toContain("identity rejected");
+    expect(hub.imports).toHaveLength(0);
   });
 });
 

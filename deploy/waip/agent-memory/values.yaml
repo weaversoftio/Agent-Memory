@@ -30,6 +30,9 @@ auth:
     clientSecretName: $SSO_CLIENT_SECRET_NAME
     defaultTeam: $SSO_DEFAULT_TEAM
     defaultRole: member
+  waipIdentity:
+    jwksUrl: $WAIP_IDENTITY_JWKS_URL
+    audience: $WAIP_IDENTITY_AUDIENCE
 
 storage:
   className: $STORAGE_CLASS

@@ -72,14 +72,17 @@ if ($Uninstall) {
   exit 0
 }
 
-if (-not $Key) { $Key = Read-Host "Your memory key (sk-mem-..., from the Memory Hub panel's API Key page)" }
-if ($Key -notlike "sk-mem-*") { throw "That doesn't look like a memory key; it should start with sk-mem-." }
 $base = $Url.TrimEnd("/")
-if (-not $PlatformToken -and $base -notmatch "://(localhost|127\.0\.0\.1)") {
-  $PlatformToken = Read-Host "WAIP token (from the agent-memory entry's Connection tab in the WAIP MCP store)"
+$local = $base -match "://(localhost|127\.0\.0\.1)"
+# Production identifies you by your WAIP token; only a local server needs the memory key.
+if ($local -and -not $Key) { $Key = Read-Host "Your memory key (sk-mem-..., from the Memory Hub panel's API Key page)" }
+if ($Key -and $Key -notlike "sk-mem-*") { throw "That doesn't look like a memory key; it should start with sk-mem-." }
+if (-not $local -and -not $PlatformToken) {
+  $PlatformToken = Read-Host "Your WAIP token (from the memory-mcp entry's Connection tab in the WAIP MCP store)"
 }
 
-$headers = [ordered]@{ "X-Memory-User-Key" = $Key }
+$headers = [ordered]@{}
+if ($Key) { $headers["X-Memory-User-Key"] = $Key }
 if ($AgentId) { $headers["X-Memory-Agent-Id"] = $AgentId }
 if ($PlatformToken) { $headers["Authorization"] = "Bearer $PlatformToken" }
 Set-Prop $mcp.mcpServers "agent-memory" ([pscustomobject]@{ url = "$base/mcp"; headers = [pscustomobject]$headers })

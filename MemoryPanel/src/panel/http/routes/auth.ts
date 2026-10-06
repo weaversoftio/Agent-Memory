@@ -372,6 +372,25 @@ export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
     }
   });
 
+  // MCP servers behind the WAIP MCP proxy exchange the platform's signed caller identity
+  // (X-WAIP-Identity) for that person's user_key, so agents need no key of their own.
+  // Errors carry the human-readable reason in `message` (the MCP shows it to the agent).
+  api.post('/auth/waip/exchange', async (c: Context) => {
+    const instanceId = c.req.header('X-Tdai-Service-Id')?.trim() || deps.instanceRegistry.listAll()[0]?.instance_id;
+    const assertion = c.req.header('X-WAIP-Identity')?.trim();
+    const fail = (status: number, code: string, message: string) =>
+      c.json({ code: status, message, request_id: c.get('reqId') ?? '', data: { error: code } }, status as 400 | 401 | 403 | 404 | 500);
+    if (!instanceId) return fail(400, 'MISSING_INSTANCE_ID', 'missing X-Tdai-Service-Id');
+    if (!assertion) return fail(401, 'MISSING_WAIP_IDENTITY', 'missing X-WAIP-Identity');
+    try {
+      const { userKey, user } = await deps.auth.exchangeWaipIdentity(instanceId, assertion, c.get('reqId'));
+      return c.json({ code: 0, message: 'ok', request_id: c.get('reqId') ?? '', data: { user_key: userKey, user } });
+    } catch (err) {
+      if (err instanceof PanelAuthError) return fail(err.status, err.code, err.message);
+      throw err;
+    }
+  });
+
   api.post('/auth/idp/woa/bind', async (c: Context) => {
     try {
       const instanceId = c.req.header('X-Tdai-Service-Id')?.trim();

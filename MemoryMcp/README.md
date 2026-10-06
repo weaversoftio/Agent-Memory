@@ -10,7 +10,12 @@ Claude Code / Cursor ──(own login)──> its usual model
         └── MCP (X-Memory-User-Key: sk-mem-…) ──> memory-mcp :8080 ──> Memory Hub panel API ──> memory-core
 ```
 
-The server is stateless and holds no secrets. Each request carries the caller's own `sk-mem` key and is passed to the Memory Hub panel API with that key. The panel's normal permission checks therefore apply: team membership, and agent ownership for edits.
+The server is stateless and holds no secrets. Each request is made as the caller, with their own `sk-mem` key, so the Memory Hub panel's normal permission checks apply: team membership, and agent ownership for edits. The key either comes with the request, or, behind the WAIP MCP proxy, is looked up from the caller's WeaverAI identity:
+
+1. The proxy attaches `X-WAIP-Identity`: a JWT the platform signs, valid 2 minutes, for this MCP only (`aud = mcp:memory-mcp`), naming the WAIP user.
+2. memory-mcp sends it to the panel's `POST /api/v1/auth/waip/exchange`. The panel verifies it against the platform's public keys (`/api/auth/jwks.json`) and answers with that person's key: the account they linked when signing in to the panel with WeaverAI, or a new account in the default SSO team. An older account that hasn't been linked yet is never claimed: the agent is told to link it in the panel first.
+
+memory-mcp itself verifies nothing and trusts nothing in the header.
 
 ## Tools (chat memory)
 
@@ -49,10 +54,13 @@ If none of these settles it, the tool answers with the list of your agents to ch
 
 | Header | Required | Meaning |
 |---|---|---|
-| `X-Memory-User-Key` | yes | Your `sk-mem-…` key from the panel's API Key page. `Authorization: Bearer sk-mem-…` also works when connecting directly (not through WAIP, which removes `Authorization`). |
+| `X-Memory-User-Key` | no* | Your `sk-mem-…` key from the panel's API Key page. `Authorization: Bearer sk-mem-…` also works when connecting directly (not through WAIP, which removes `Authorization`). An explicit key always wins over the WAIP identity. |
+| `X-WAIP-Identity` | no* | Set by the WAIP MCP proxy, never by clients (the proxy drops any client-sent copy). |
 | `X-Memory-Agent-Id` | no | Default agent for every tool call |
 | `X-Memory-Team-Id` | no | Team of that agent (only for an agent you don't own) |
 | `X-Memory-Service-Id` | no | Memory instance ID; defaults to `MEMORY_SERVICE_ID` |
+
+\* One of the two is needed for tool calls and hooks. The handshake and `tools/list` work without either.
 
 ## Configuration
 
@@ -112,7 +120,9 @@ docker build \
 
 Never name the store entry `agent-memory` (or anything else already used as a Helm release name). WAIP's chart install uninstalls same-name releases in other namespaces, so that name deletes the Agent Memory app itself.
 
-Clients connect through the platform proxy, `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp/mcp`. The entry's **Connection** tab in the platform UI generates the Claude / Cursor / Codex command with a WAIP service token in `Authorization`. Add your memory key to it as an extra header: `X-Memory-User-Key: <your sk-mem key>`.
+Clients connect through the platform proxy, `https://weaverai-api.platform.weaversoft.io/api/mcp-proxy/memory-mcp/mcp`. The entry's **Connection** tab in the platform UI generates the Claude / Cursor / Codex command with a WAIP service token in `Authorization`. With a platform that sends `X-WAIP-Identity`, that's all: the token says who you are. On an older platform, add your memory key as an extra header: `X-Memory-User-Key: <your sk-mem key>`.
+
+The hub needs `PANEL_AUTH_WAIP_JWKS_URL` (the platform's `/api/auth/jwks.json`, in-cluster) and SSO (OIDC) enabled; `PANEL_AUTH_WAIP_AUDIENCE` defaults to `mcp:memory-mcp`, which must match the store entry's name.
 
 ## Development
 
