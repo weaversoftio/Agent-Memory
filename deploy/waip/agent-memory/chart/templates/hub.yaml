@@ -106,6 +106,9 @@ spec:
               value: {{ .Values.auth.oidc.defaultTeam | quote }}
             - name: PANEL_AUTH_OIDC_DEFAULT_ROLE
               value: {{ .Values.auth.oidc.defaultRole | quote }}
+            # Creating SSO accounts needs the admin's user_key (the instance api_key is a placeholder).
+            - name: PANEL_AUTH_ADMIN_USER_KEY_FILE
+              value: /var/run/secrets/agent-memory-admin/user-key
             # SSO identity links and the key that encrypts them must survive restarts (the root fs is read-only).
             - name: PANEL_AUTH_IDENTITY_STORE_PATH
               value: /data/knowledge/panel-auth/identities.json
@@ -133,6 +136,9 @@ spec:
             - name: oidc
               mountPath: /var/run/secrets/agent-memory-oidc
               readOnly: true
+            - name: admin-key
+              mountPath: /var/run/secrets/agent-memory-admin
+              readOnly: true
             {{- end }}
       volumes:
         - name: data
@@ -153,6 +159,14 @@ spec:
             items:
               - key: client-secret
                 path: client-secret
+        # Created by the install pipeline after the chart (first install): optional, and read on use.
+        - name: admin-key
+          secret:
+            secretName: {{ .Release.Name }}-admin-key
+            optional: true
+            items:
+              - key: user-key
+                path: user-key
         {{- end }}
 ---
 apiVersion: v1

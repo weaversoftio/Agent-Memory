@@ -147,6 +147,8 @@ export interface PanelAuthConfig {
   };
   /** Public base URL of the panel, e.g. https://agent-memory.example.com (OIDC redirect and logout return). */
   appUrl: string;
+  /** File holding the admin's user_key, for admin-only calls when the instance api_key isn't one; empty = use api_key. */
+  adminUserKeyFile: string;
   oidc: PanelOidcConfig;
 }
 
@@ -249,6 +251,7 @@ function buildAuthConfig(): PanelAuthConfig {
       ),
     },
     appUrl: appUrl.replace(/\/+$/, ''),
+    adminUserKeyFile: env('PANEL_AUTH_ADMIN_USER_KEY_FILE', ''),
     oidc: buildOidcConfig(oidcEnabled),
   };
 }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,12 @@ const PUBLIC_ISSUER = 'https://auth.example.com/realms/acme';
 const INTERNAL_ISSUER = 'http://keycloak.platform.svc/realms/acme';
 const APP_URL = 'https://memory.example.com';
 const ADMIN_KEY = 'sk-mem-admin-key-0001';
+/** Like production: the instance api_key is a placeholder, the admin key comes from a mounted file. */
+const PLACEHOLDER_API_KEY = 'local';
+const ADMIN_ONLY = new Set([
+  'user/create', 'user/create-with-key', 'user/bind-external', 'user/find-by-external', 'user/list',
+  'user-key/create', 'team/list', 'team/create', 'team-member/add',
+]);
 
 interface IdpUser {
   preferred_username: string;
@@ -109,8 +115,9 @@ function fakeCore() {
   const pub = (u: User) => ({ user_id: u.user_id, username: u.username, user_type: u.user_type });
 
   const kernel: MetaKernelPort = {
-    async invoke(action, body) {
+    async invoke(action, body, ctx) {
       calls.push({ action, body });
+      if (ADMIN_ONLY.has(action) && ctx.userKey !== ADMIN_KEY) return fail(401, 'unauthorized: invalid_user_key');
       switch (action) {
         case 'auth/verify': {
           const u = users.find((x) => x.key === body.user_key);
@@ -172,6 +179,9 @@ const silentLogger: Logger = {
 };
 
 function authConfig(dir: string, overrides: Partial<PanelAuthConfig['oidc']> = {}): PanelAuthConfig {
+  const adminKeyFile = join(dir, 'admin-user-key');
+  writeFileSync(adminKeyFile, `${ADMIN_KEY}
+`);
   return {
     userKeyEnabled: true,
     idpEnabled: true,
@@ -185,6 +195,7 @@ function authConfig(dir: string, overrides: Partial<PanelAuthConfig['oidc']> = {
       logoutUrl: '', paasId: '', defaultTeamId: '', defaultRole: 'member', authProvider: 'local',
     },
     appUrl: APP_URL,
+    adminUserKeyFile: adminKeyFile,
     oidc: {
       enabled: true,
       id: 'keycloak',
@@ -214,7 +225,7 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', idp.fetchImpl);
   service = new PanelAuthService({
     config: authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))),
-    instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: ADMIN_KEY }]),
+    instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
     metaKernel: core.kernel,
     logger: silentLogger,
   });
@@ -331,7 +342,7 @@ describe('OIDC login', () => {
     idp.setAudience('some-other-app');
     const fresh = new PanelAuthService({
       config: authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))),
-      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: ADMIN_KEY }]),
+      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
       metaKernel: core.kernel,
       logger: silentLogger,
     });
@@ -351,10 +362,25 @@ describe('OIDC login', () => {
     expect(await service.buildIdpLogoutUrl(null)).toBe('/');
   });
 
+  it('admin-only calls fail without the admin key file (placeholder api_key only)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'panel-oidc-'));
+    service = new PanelAuthService({
+      config: { ...authConfig(dir), adminUserKeyFile: join(dir, 'not-mounted') },
+      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
+      metaKernel: core.kernel,
+      logger: silentLogger,
+    });
+    const r = await signIn({ preferred_username: 'avi' });
+    if (r.kind !== 'pending') throw new Error('expected pending');
+    await expect(service.completePendingWoaLogin({ token: r.pending.token, username: 'avi', createNew: true }))
+      .rejects.toBeInstanceOf(PanelAuthError);
+    expect(core.users).toHaveLength(1);
+  });
+
   it('a misconfigured IdP disables SSO but keeps key login', () => {
     const svc = new PanelAuthService({
       config: authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-')), { clientSecret: '' }),
-      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: ADMIN_KEY }]),
+      instances: new InstanceRegistry([{ instance_id: 'default', name: 'default', gateway_endpoint: 'http://core.test', api_key: PLACEHOLDER_API_KEY }]),
       metaKernel: core.kernel,
       logger: silentLogger,
     });

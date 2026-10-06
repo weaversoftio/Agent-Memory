@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { Logger } from '../infra/logger.js';
 import type { PanelAuthConfig } from '../config/panel-config.js';
 import { InstanceRegistry } from '../config/instance-registry.js';
@@ -495,7 +496,7 @@ export class PanelAuthService {
     if (!pending) throw new PanelAuthError('WOA_LOGIN_EXPIRED', 'WOA login confirmation expired', 401);
 
     const entry = this.requireInstance(pending.instanceId);
-    const context = this.context(entry, entry.api_key, input.requestId);
+    const context = this.context(entry, this.adminKey(entry), input.requestId);
     const key = input.userKey.trim();
     if (!key) {
       throw new PanelAuthError('INVALID_USER_KEY', 'user_key must not be empty', 400);
@@ -590,7 +591,7 @@ export class PanelAuthService {
     const entry = this.requireInstance(input.instanceId);
     // 预览是"只读探测"，用实例 admin key 作为网关 Bearer（无用户凭据可用）；
     // auth/verify 只按 body 里的 user_key 判定，不读取调用方身份。
-    const context = this.context(entry, entry.api_key, input.requestId);
+    const context = this.context(entry, this.adminKey(entry), input.requestId);
     const verified = await this.metaKernel.invoke('auth/verify', { user_key: key }, context);
     const data = verified?.data as { valid?: boolean } | null;
     if (verified?.code !== 0 || data?.valid !== true) return { exists: false };
@@ -619,7 +620,7 @@ export class PanelAuthService {
   }): Promise<{ user_id: string; user: SessionUser; created: boolean }> {
     const key = assertUsableUserKey(input.userKey);
     const entry = this.requireInstance(input.instanceId);
-    const context = this.context(entry, entry.api_key, input.requestId);
+    const context = this.context(entry, this.adminKey(entry), input.requestId);
 
     // 已存在 → 直接登录，不建号。
     const probe = await this.metaKernel.invoke('auth/verify', { user_key: key }, context);
@@ -758,7 +759,7 @@ export class PanelAuthService {
     const externalId = this.externalAuthIdOf(identity);
     if (!externalId) return null;
     const entry = this.requireInstance(instanceId);
-    const context = this.context(entry, entry.api_key, requestId);
+    const context = this.context(entry, this.adminKey(entry), requestId);
 
     // 按 external_id 反查两类账号，二者的 auth_provider 不同：
     //   ① WOA 首次登录新建的号 → provisionIdentity 建号时 auth_provider=woa；
@@ -897,7 +898,7 @@ export class PanelAuthService {
     // "无 user-key 白名单"分支，必须带 admin user_key。
     // 单一凭证来源（见 §12.3）：统一用实例 api_key，不再另设 admin key 配置项。
     // 部署前提：实例 api_key 必须能在 core 侧解析为 system_admin，否则建号 401。
-    const context = this.context(entry, entry.api_key, requestId);
+    const context = this.context(entry, this.adminKey(entry), requestId);
 
     // 存量账号接入：用户给的 key 若在系统内已存在，把外部身份绑定到**那个已有账号**，
     // 而不是新建——这样老数据（memories/teams/skills）原样保留。
@@ -1050,8 +1051,8 @@ export class PanelAuthService {
     name: string,
     requestId?: string,
   ): Promise<string> {
-    const context = this.context(entry, entry.api_key, requestId);
-    const listed = await this.metaKernel.invoke('team/list', { user_key: entry.api_key, name, limit: 100 }, context);
+    const context = this.context(entry, this.adminKey(entry), requestId);
+    const listed = await this.metaKernel.invoke('team/list', { user_key: this.adminKey(entry), name, limit: 100 }, context);
     if (listed?.code !== 0) {
       throw new PanelAuthError('DEFAULT_TEAM_LOOKUP_FAILED', listed?.message || 'failed to look up the default team', 502);
     }
@@ -1059,7 +1060,7 @@ export class PanelAuthService {
     const existing = items.find((t) => t.name === name && typeof t.team_id === 'string');
     if (existing) return existing.team_id as string;
 
-    const admin = await this.verifyCoreUser(entry.instance_id, entry.api_key, requestId);
+    const admin = await this.verifyCoreUser(entry.instance_id, this.adminKey(entry), requestId);
     const created = await this.metaKernel.invoke('team/create', {
       name,
       owner_user_id: admin.user_id,
@@ -1093,6 +1094,25 @@ export class PanelAuthService {
       throw new PanelAuthError('AUTH_METHOD_DISABLED', 'WOA authentication is disabled', 404);
     }
     return provider as HeaderInjectedProvider;
+  }
+
+  /**
+   * Credential for admin-only core calls (creating users and team members, external-id lookups).
+   * The instance api_key is often a placeholder (core's Bearer gate is off), so a deployment can
+   * point PANEL_AUTH_ADMIN_USER_KEY_FILE at the admin's user_key. Read on every use: the Secret
+   * behind the file may only appear after the panel starts (a first install creates the admin last).
+   */
+  private adminKey(entry: ReturnType<InstanceRegistry['resolve']>): string {
+    const file = this.config.adminUserKeyFile;
+    if (file) {
+      try {
+        const key = readFileSync(file, 'utf8').trim();
+        if (key) return key;
+      } catch {
+        // Not mounted (yet): fall back to the instance api_key.
+      }
+    }
+    return entry.api_key;
   }
 
   private requireInstance(instanceId: string) {
