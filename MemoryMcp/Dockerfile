@@ -10,8 +10,15 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-slim
+# Defaults for the Memory Hub address and instance, overridable with -e at run time.
+# The WAIP MCP store can't set env vars, so its image bakes the in-cluster hub address in:
+#   --build-arg MEMORY_HUB_URL=http://agent-memory-hub.apps.svc.cluster.local:8125
+ARG MEMORY_HUB_URL=http://127.0.0.1:8125
+ARG MEMORY_SERVICE_ID=default
 ENV NODE_ENV=production \
-    PORT=8080
+    PORT=8080 \
+    MEMORY_HUB_URL=$MEMORY_HUB_URL \
+    MEMORY_SERVICE_ID=$MEMORY_SERVICE_ID
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
