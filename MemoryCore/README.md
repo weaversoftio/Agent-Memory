@@ -185,6 +185,70 @@ An adapter generally has three responsibilities:
 
 The v3 memory data plane requires `team_id`, `agent_id`, and `user_id`. Supply them in the request body or the corresponding `x-tdai-*` headers. `session_id` is optional and narrows operations to a session when provided.
 
+## Custom prompts and generation provenance
+
+Each Memory Instance can have up to 500 custom prompts, each at most 10,000 Unicode characters. A prompt and its target bindings are stored separately; an update keeps the same `memory_prompt_id` and does `version += 1`, and new generation tasks with an existing binding use the latest version.
+
+Target priority:
+
+```text
+Agent > Team > Instance > built-in system prompt
+```
+
+- An Agent is identified by `team_id + agent_id`.
+- When no custom prompt matches, L1/L2/L3 use the current built-in prompts unchanged.
+- When one matches, only the customer's memory strategy is appended; the fixed output protocols (L1 JSON, L2 Scene Markdown, L3 Persona/Doctrine) cannot be changed.
+- Deleting a prompt removes its bindings; at runtime it falls back to the next level automatically.
+
+Main endpoints:
+
+```text
+POST /v3/memory-prompt/create
+GET  /v3/memory-prompt/get
+POST /v3/memory-prompt/update
+POST /v3/memory-prompt/delete
+POST /v3/memory-prompt/set
+GET  /v3/memory-prompt/log
+GET  /v3/memory-generation-log/list
+GET  /v3/memory-generation-log/get
+```
+
+Create a prompt:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8420/v3/memory-prompt/create \
+  -H "Authorization: Bearer ${TDAI_GATEWAY_API_KEY}" \
+  -H "x-tdai-service-id: local-memory" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "architecture-decisions",
+    "layer": "l1",
+    "prompt": "Focus on extracting architecture decisions, compatibility constraints, risks and reusable methods."
+  }'
+```
+
+Locally, when `TDAI_GATEWAY_API_KEY` is not set and the gateway only listens on loopback, `Authorization` can be omitted; `x-tdai-service-id` is always required.
+
+Generation logs don't store the custom prompt text, only the prompt ID, version, source and SHA-256. Query by Memory ID:
+
+```bash
+curl -sS -G http://127.0.0.1:8420/v3/memory-generation-log/get \
+  -H "Authorization: Bearer ${TDAI_GATEWAY_API_KEY}" \
+  -H "x-tdai-service-id: local-memory" \
+  --data-urlencode "memory_id=<memory-id>" \
+  --data-urlencode "layer=l1"
+```
+
+The TypeScript SDK exports `MemoryPromptClient` and `MemoryGenerationLogClient`; the Python SDK provides both sync and async clients.
+
+Layered-generation E2E against a real VDB, COS and an OpenAI-compatible model:
+
+```bash
+npm run e2e:memory-prompt:vdb-cos
+```
+
+This test verifies the actual model requests for Agent L1, Team L2 and Instance L3 prompts, Memory/Profile persistence, Generation Refs and COS logs, and cleans up its data using a unique test ID.
+
 ## Configuration
 
 The Gateway resolves configuration in this order:

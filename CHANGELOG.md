@@ -24,7 +24,7 @@
   数据目录 / 实例，切换后原数据仍留在原后端。当前版本需自行备份并
   手工迁移；后续版本将提供官方迁移工具
 
-用法见 [INSTALL_CN.md](./INSTALL_CN.md)「MongoDB 存储后端（试验特性）」章节。
+用法见 [INSTALL.md](./INSTALL.md)「MongoDB 存储后端（试验特性）」章节。
 
 ### 🧰 技能（Skill）体验优化
 
@@ -53,7 +53,7 @@
   负责埋点上报（Proxy 记录 memory / skill 工具调用，Knowledge 记录
   wiki / code-graph 工具调用），Core 负责查询接口。Panel 会调用
   Core 与 Knowledge 的配置发现接口判断是否启用，启用后再调查询接口
-  拉取数据。详见 [INSTALL_CN.md](./INSTALL_CN.md) 的
+  拉取数据。详见 [INSTALL.md](./INSTALL.md) 的
   「数据分析与可观测性（可选）」章节
 
 ### 🐛 修复
@@ -194,7 +194,7 @@
 ## [2.0.0] — 2026-08-03
 
 > **产品定位**：让 Agent 的经验、文档、代码沉淀成可复用资产，让下一位 Agent
-> 直接读档。详见 [README_CN.md](./README_CN.md)。
+> 直接读档。详见 [README.md](./README.md)。
 
 ### 🧠 四种记忆资产 · 首次完整开源
 
@@ -252,7 +252,7 @@ cp .env.example .env && $EDITOR .env    # 填入两组 LLM 参数
 `.admin-key`；自检 `/v3/meta/auth/verify` 后打印可复制的 `claude` 启动命令。
 `stop-all.sh --purge` 彻底清 volume + admin key，方便重置。
 
-详见 [INSTALL_CN.md](./INSTALL_CN.md) / [INSTALL.md](./INSTALL.md)。
+详见 [INSTALL.md](./INSTALL.md)。
 
 ### 🧰 官方 SDK
 
@@ -291,7 +291,7 @@ cp .env.example .env && $EDITOR .env    # 填入两组 LLM 参数
 Docker 镜像 tag 独立于 npm 版本，本次镜像发的是 `:1.0.0-beta.1`。
 
 > **产品定位**：让 Agent 的经验、文档、代码沉淀成可复用资产，让下一位 Agent
-> 直接读档。详见 [README_CN.md](./README_CN.md)。
+> 直接读档。详见 [README.md](./README.md)。
 
 ### 🧠 四种记忆资产 · 首次完整开源
 
@@ -346,7 +346,7 @@ cp .env.example .env && $EDITOR .env    # 填入两组 LLM 参数
 `.admin-key`；自检 `/v3/meta/auth/verify` 后打印可复制的 `claude` 启动命令。
 `stop-all.sh --purge` 彻底清 volume + admin key，方便重置。
 
-详见 [INSTALL_CN.md](./INSTALL_CN.md) / [INSTALL.md](./INSTALL.md)。
+详见 [INSTALL.md](./INSTALL.md)。
 
 ### 🧰 官方 SDK
 
