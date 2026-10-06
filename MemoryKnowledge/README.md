@@ -1,55 +1,56 @@
-# MemoryKnowledge（Knowledge Service）
+# MemoryKnowledge (Knowledge Service)
 
-本目录是 monorepo 内的 **Knowledge Service（KS）**：用户侧 Wiki + Code-Graph 引擎。  
-管控面在 [`../MemoryPanel`](../MemoryPanel/)。
+This directory is the monorepo's **Knowledge Service (KS)**: the user-facing Wiki + Code-Graph engine.  
+The control plane lives in [`../MemoryPanel`](../MemoryPanel/).
 
-默认端口 **8421**，API 前缀 **`/v3`**。
+Default port **8421**, API prefix **`/v3`**.
 
-## 做什么
+## What it does
 
-| 能力 | 说明 |
+| Capability | Description |
 | --- | --- |
-| **LLM-Wiki** | 上传/拉取文档 → LLM 抽取结构化页面 → FTS5 全文检索 + 知识图谱 |
-| **Code-Graph** | `git clone` 仓库 → CodeGraph 索引（符号、调用、文件树）→ 探索查询 |
-| **Auto-Sync**（可选） | 定时扫描 code-graph，FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。默认关闭，见 `docs/data-flow.md` §9。 |
-| **Tools** | `POST /v3/tools/list`、`/v3/tools/call`，供 Agent / Kernel 自发现调用 |
-| **状态回调** | ingest/sync 完成后回调 Panel（`TMC_CALLBACK_URL`），再写远端 meta / knowledge |
+| **LLM-Wiki** | upload/fetch documents → the LLM extracts structured pages → FTS5 full-text search + knowledge graph |
+| **Code-Graph** | `git clone` a repository → CodeGraph index (symbols, calls, file tree) → exploration queries |
+| **Auto-Sync** (optional) | periodically scans code-graphs; a FIFO queue + worker pool pulls git updates and rebuilds the index. Off by default; see `docs/data-flow.md` §9. |
+| **Private repositories** (optional) | server-wide git credentials via `KNOWLEDGE_GIT_AUTH_URL_PREFIX` / `_USERNAME` / `_TOKEN`; the token turns it on and is sent as an HTTP header, never stored in repo URLs |
+| **Tools** | `POST /v3/tools/list`, `/v3/tools/call`, for Agents / the Kernel to discover and call |
+| **Status callback** | after an ingest/sync finishes, calls back the Panel (`TMC_CALLBACK_URL`), which then writes the remote meta / knowledge |
 
-单独 `pnpm dev` 可以起服务；产品链路里必须有 Panel 推 `llm_binding`、收 callback、写远端元数据。
+`pnpm dev` alone starts the service; in the product flow the Panel must push the `llm_binding`, receive callbacks and write the remote metadata.
 
-## 源码结构
+## Source layout
 
 ```text
 MemoryKnowledge/
 ├── src/
-│   ├── server.ts           # Hono 入口：挂路由、Swagger、启动监听
-│   ├── module.ts           # 组装 store / wiki / code-graph / 队列 / 恢复
-│   ├── config.ts           # 环境变量
+│   ├── server.ts           # Hono entry: mounts routes, Swagger, starts listening
+│   ├── module.ts           # wires store / wiki / code-graph / queues / recovery
+│   ├── config.ts           # environment variables
 │   ├── callback.ts         # → Panel status-callback
-│   ├── telemetry.ts        # 可选 Langfuse（未配 KEY 则关闭）
+│   ├── telemetry.ts        # optional Langfuse (off when no KEY is set)
 │   ├── routes/             # wiki / code-graph / tools / llm-binding / health
 │   ├── engines/
-│   │   ├── wiki/           # ingest-v2、索引、图谱搜索
+│   │   ├── wiki/           # ingest-v2, indexing, graph search
 │   │   └── code/           # CodeGraph bridge
-│   ├── store/              # SQLite（Drizzle）+ 构建队列 + llm_binding
-│   ├── source-fetcher/     # Git 拉取
-│   ├── mcp/                # MCP stdio（转发到本机 HTTP API）
+│   ├── store/              # SQLite (Drizzle) + build queue + llm_binding
+│   ├── source-fetcher/     # Git fetching
+│   ├── mcp/                # MCP stdio (forwards to the local HTTP API)
 │   ├── db/                 # schema / client
 │   └── middleware/
-├── docs/                   # 设计与 API 细节
-├── Dockerfile              # KS 单镜像（可选）
-└── docker-compose.yml      # 本地一键跑 KS 容器（可选）
+├── docs/                   # design and API details
+├── Dockerfile              # standalone KS image (optional)
+└── docker-compose.yml      # run the KS container locally with one command (optional)
 ```
 
-## 本地启动
+## Running locally
 
-生产/联调若要用 **Panel + KS 一体镜像**，直接拉 [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)（用法见 [`../deploy/panel-knowledge-combined/README.md`](../deploy/panel-knowledge-combined/README.md)）。下面是只跑本服务源码的方式：
+For production or integration testing with the **combined Panel + KS image**, pull [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub) (usage in [`../deploy/panel-knowledge-combined/README.md`](../deploy/panel-knowledge-combined/README.md)). To run just this service from source:
 
 ```bash
 cd MemoryKnowledge
 pnpm install --ignore-workspace
 cp .env.example .env
-# 编辑 .env（见下）
+# edit .env (see below)
 pnpm dev
 ```
 
@@ -58,47 +59,47 @@ curl -s http://127.0.0.1:8421/health
 # Swagger: http://127.0.0.1:8421/docs
 ```
 
-与 Panel 联调时（Panel 默认 `8123`），KS `.env` 至少：
+When running together with the Panel (Panel default `8123`), the KS `.env` needs at least:
 
 ```dotenv
 PORT=8421
 API_PREFIX=/v3
 KNOWLEDGE_DATA_DIR=./data
 KNOWLEDGE_DB_PATH=./data/knowledge.db
-KNOWLEDGE_PUBLIC_BASE_URL=http://127.0.0.1:8421/v3   # Agent 可达，必须含 /v3
-TMC_CALLBACK_URL=http://127.0.0.1:8123               # Panel 根地址，不要带 callback path
+KNOWLEDGE_PUBLIC_BASE_URL=http://127.0.0.1:8421/v3   # reachable by Agents, must include /v3
+TMC_CALLBACK_URL=http://127.0.0.1:8123               # Panel root address, no callback path
 LLM_MODE=proxy
 LLM_MODEL=Memory-Model
 ```
 
-Panel 侧（Panel 自己的 `.env`，不是 KS）：
+On the Panel side (the Panel's own `.env`, not the KS one):
 
 ```dotenv
 KNOWLEDGE_SERVICE_URL=http://127.0.0.1:8421
 ```
 
-| 变量 | 谁读 | 带 `/v3`？ |
+| Variable | Read by | Includes `/v3`? |
 | --- | --- | --- |
-| `KNOWLEDGE_PUBLIC_BASE_URL` | KS → 写入资源 `service_url` | 要 |
-| Panel `KNOWLEDGE_SERVICE_URL` | Panel → 调 KS 管理 API | 不要 |
-| `TMC_CALLBACK_URL` | KS → 回调 Panel | 不要（只填根） |
+| `KNOWLEDGE_PUBLIC_BASE_URL` | KS → written into the resource's `service_url` | yes |
+| Panel `KNOWLEDGE_SERVICE_URL` | Panel → calls the KS management API | no |
+| `TMC_CALLBACK_URL` | KS → calls back the Panel | no (root only) |
 
-`LLM_MODE=proxy`（默认）：Wiki 用 Panel 按 `x-tdai-service-id` 推送的 `llm_binding`，本地不必起 Proxy。  
-`LLM_MODE=custom`：在 `.env` 设 `LLM_API_KEY` / `LLM_BASE_URL`（及可选 `LLM_PROTOCOL=anthropic`）。
+`LLM_MODE=proxy` (default): the Wiki uses the `llm_binding` the Panel pushes per `x-tdai-service-id`; no local proxy needed.  
+`LLM_MODE=custom`: set `LLM_API_KEY` / `LLM_BASE_URL` in `.env` (and optionally `LLM_PROTOCOL=anthropic`).
 
-## 常用命令
+## Common commands
 
 ```bash
-pnpm dev          # HTTP API（tsx 热更）
-pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
+pnpm dev          # HTTP API (tsx hot reload)
+pnpm dev:mcp      # MCP stdio (separate terminal; needs the HTTP server running)
 pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
 ```
 
-## 可选：ClickHouse 工具调用埋点
+## Optional: ClickHouse tool-call logging
 
-默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。
+Off by default. With the variables below set, the Knowledge Service writes `POST /v3/tools/call` into a `tool_call_logs` table compatible with Memory/Skill. The table is created idempotently at startup; failed batch writes or table creation never block business requests.
 
 ```dotenv
 KNOWLEDGE_CLICKHOUSE_ENABLED=true
@@ -106,12 +107,12 @@ KNOWLEDGE_CLICKHOUSE_URL=http://clickhouse.example.com:8123
 KNOWLEDGE_CLICKHOUSE_DATABASE=default
 KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
 KNOWLEDGE_CLICKHOUSE_USER=knowledge_writer
-KNOWLEDGE_CLICKHOUSE_PASSWORD=              # 仅从环境注入，不写入代码
+KNOWLEDGE_CLICKHOUSE_PASSWORD=              # injected from the environment only, never in code
 ```
 
-可选调优项见 `.env.example`。若调用方传入 `x-conversation-id`、`x-tdai-user-id`、`x-tdai-team-id`、`x-tdai-agent-id`、`x-tdai-agent-source`、`x-tdai-space-id`、`x-tdai-turn-seq`，这些维度会一并入库；缺失时对应列为空。请求正文递归脱敏并截断到 512 bytes。
+Optional tuning is in `.env.example`. If the caller sends `x-conversation-id`, `x-tdai-user-id`, `x-tdai-team-id`, `x-tdai-agent-id`, `x-tdai-agent-source`, `x-tdai-space-id` or `x-tdai-turn-seq`, those dimensions are stored too; missing ones leave their columns empty. Request bodies are recursively redacted and truncated to 512 bytes.
 
-## 可选：Langfuse
+## Optional: Langfuse
 
-配置 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`（及可选 `LANGFUSE_BASE_URL`）即可上报 Wiki LLM 调用。  
-未配置时关闭 Trace，不影响业务。
+Set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` (and optionally `LANGFUSE_BASE_URL`) to report Wiki LLM calls.  
+Without them tracing is off and nothing else is affected.
