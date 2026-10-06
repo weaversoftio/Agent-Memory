@@ -47,6 +47,9 @@ export class HubClient {
 
   /** POST /api/v1/{path}; returns `data` on code 0, throws HubError otherwise. */
   async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    if (!this.opts.userKey) {
+      throw new HubError(401, "Missing memory key: add your sk-mem key as the X-Memory-User-Key header in your MCP config.");
+    }
     const url = `${this.opts.baseUrl}/api/v1/${path.replace(/^\/+/, "")}`;
     let res: Response;
     try {

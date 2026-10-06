@@ -71,14 +71,16 @@ afterEach(async () => {
 });
 
 describe("memory MCP server", () => {
-  it("rejects requests without a memory key", async () => {
-    await start(fakeHub([]).fetchImpl);
-    const res = await fetch(`${baseUrl}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-    });
-    expect(res.status).toBe(401);
+  it("lists tools without a memory key, but refuses tool calls", async () => {
+    const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
+    await start(hub.fetchImpl);
+    const client = await connect({});
+    expect((await client.listTools()).tools).toHaveLength(7);
+    const result = await client.callTool({ name: "memory_whoami", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Missing memory key");
+    expect(hub.calls).toHaveLength(0);
+    await client.close();
   });
 
   it("lists the chat-memory tools", async () => {

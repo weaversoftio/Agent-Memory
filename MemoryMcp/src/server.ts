@@ -17,7 +17,7 @@ import { registerChatMemoryTools } from "./tools.js";
 import { handleHook, type HookClient } from "./hooks.js";
 
 export const SERVER_NAME = "agent-memory";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.1.1";
 
 const INSTRUCTIONS =
   "Agent Memory: the team's shared long-term memory for this agent. Search it (memory_search) before answering questions about past decisions, conventions or project facts. When the user states a durable fact, decision or preference, save it with memory_add as one standalone sentence. Never save secrets or credentials.";
@@ -101,14 +101,10 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
       return res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }));
     }
 
-    const userKey = userKeyFrom(req);
-    if (!userKey) {
-      return sendJson(res, 401, {
-        jsonrpc: "2.0",
-        error: { code: -32001, message: "Missing memory key: send your sk-mem key in the X-Memory-User-Key header." },
-        id: null,
-      });
-    }
+    // Without a key the server still answers the handshake and tools/list (the WAIP MCP store
+    // lists tools that way, with no user identity); every tool call then fails with a clear
+    // "missing memory key" error, because the hub client refuses to call the panel.
+    const userKey = userKeyFrom(req) ?? "";
 
     let body: unknown;
     try {
