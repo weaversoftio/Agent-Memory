@@ -144,6 +144,38 @@ export const coreCountRequestSchema = z.object({});
 export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 
 // ============================
+// Atomic add (v3 only): write one L1 memory directly, without LLM extraction.
+// Used by agents (e.g. the memory MCP) that want to save a fact explicitly.
+// ============================
+
+export const ATOMIC_MEMORY_TYPES = [
+  "persona",
+  "episodic",
+  "instruction",
+  "work_fact",
+  "work_task",
+  "work_method",
+  "work_artifact",
+] as const;
+
+export const atomicAddRequestSchema = z.object({
+  content: z.string().trim().min(1).max(8192),
+  type: z.enum(ATOMIC_MEMORY_TYPES).default("work_fact"),
+  /** 0-100, higher = more important; -1 = strict global instruction (same scale as extraction). */
+  priority: z.number().int().min(-1).max(100).default(50),
+  /** Scene name the memory belongs to (optional; L2 scene extraction groups by it). */
+  background: z.string().max(512).optional(),
+});
+export type AtomicAddRequest = z.infer<typeof atomicAddRequestSchema>;
+
+export interface AtomicAddData {
+  id: string;
+  version: string;
+  type: (typeof ATOMIC_MEMORY_TYPES)[number];
+  created_at: string;
+}
+
+// ============================
 // Override: atomic response version exposure
 // ============================
 

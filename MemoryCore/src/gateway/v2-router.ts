@@ -17,7 +17,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
-import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import { DEFAULT_ISOLATION_ID, type IMemoryStore, type L0Record, type ProfileSyncRecord } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -26,7 +26,7 @@ import type { IStateBackend } from "../core/state/types.js";
 import type { PipelineWorker } from "../services/pipeline-worker.js";
 import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
-import type { MemoryRecord } from "../core/record/l1-writer.js";
+import { generateMemoryId, type MemoryRecord } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 
 // ── Zod schemas (validated types + defaults) ──
@@ -66,6 +66,8 @@ import {
   taskBatchDeleteRequestSchema,
   formatZodError,
   resolveIsolation,
+  atomicAddRequestSchema,
+  type AtomicAddData,
   type ApiResponseEnvelope,
   type V2AuthContext,
   type ConversationItem,
@@ -156,6 +158,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/search",
   "/conversation/delete",
   "/conversation/count",
+  "/atomic/add",
   "/atomic/update",
   "/atomic/query",
   "/atomic/search",
@@ -170,6 +173,9 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/write",
   "/core/count",
 ]);
+
+/** Data-plane routes mounted only under /v3 (no legacy /v2 twin). */
+const V3_ONLY_SUBPATHS = new Set<string>(["/atomic/add"]);
 
 /**
  * 写一条审计事件到 store.appendAudit。失败不阻塞主请求（容忍 audit 丢失）。
@@ -416,6 +422,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/search": handleConversationSearch,
   "/conversation/delete": handleConversationDelete,
   "/conversation/count": handleConversationCount,
+  "/atomic/add": handleAtomicAdd,
   "/atomic/update": handleAtomicUpdate,
   "/atomic/query": handleAtomicQuery,
   "/atomic/search": handleAtomicSearch,
@@ -436,7 +443,7 @@ const routeTable: Record<string, RouteHandler> = {
   ...Object.fromEntries(
     Object.entries(DATAPLANE_HANDLERS).flatMap(([sub, h]) => {
       const v3Route = [`${V3_PREFIX}${sub}`, h] as const;
-      if (sub.endsWith("/count")) return [v3Route];
+      if (sub.endsWith("/count") || V3_ONLY_SUBPATHS.has(sub)) return [v3Route];
       return [[`${V2_PREFIX}${sub}`, h] as const, v3Route];
     }),
   ),
@@ -1051,6 +1058,60 @@ async function handleConversationDelete(body: unknown, auth: V2AuthContext, requ
   }
 
   return successEnvelope<ConversationDeleteData>({ deleted_count: deletedCount }, requestId);
+}
+
+/**
+ * POST /v3/atomic/add — write one L1 memory directly (no LLM extraction).
+ *
+ * The record is owned by the request's isolation triple (team / agent / user), like
+ * extracted memories, so it shows up in the same agent's L1 lists and searches. It is
+ * picked up by the next L2 scene run through the usual updatedAfter cursor.
+ * Not written to the audit table: that table only records update/delete, and
+ * extracted memories aren't audited on creation either.
+ */
+async function handleAtomicAdd(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = atomicAddRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { content, type, priority, background } = parsed.data;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+
+  const iso = deps.requestIsolation;
+  if (!iso?.teamId || !iso.agentId || !iso.userId) {
+    return errorEnvelope(400, "team_id, agent_id and user_id are required", requestId);
+  }
+
+  const now = new Date().toISOString();
+  const id = generateMemoryId();
+  const sessionId = iso.sessionId && iso.sessionId !== DEFAULT_ISOLATION_ID ? iso.sessionId : "manual";
+  const record: MemoryRecord = {
+    id,
+    content,
+    type,
+    priority,
+    scene_name: background ?? "",
+    source_message_ids: [],
+    metadata: {},
+    timestamps: [now],
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    sessionKey: sessionId,
+    sessionId,
+    taskId: iso.taskId,
+    teamId: iso.teamId,
+    userId: iso.userId,
+    agentId: iso.agentId,
+  };
+
+  const embedding = deps.getEmbedding();
+  let emb: Float32Array | undefined;
+  if (embedding) { try { emb = await embedding.embed(content); } catch (e) { console.warn(`[v2-router] L1 embedding failed:`, e); } }
+
+  await store.upsertL1(record, emb);
+
+  return successEnvelope<AtomicAddData>({ id, version: "v1", type, created_at: now }, requestId);
 }
 
 async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {

@@ -84,7 +84,7 @@ Different modules use different failure `message` formats, and the frontend has 
 
 | Module | Endpoints | Prefix |
 |---|---|---|
-| L0–L3 data plane | 18 | `/v3/conversation·atomic·scenario·core/*` |
+| L0–L3 data plane | 19 | `/v3/conversation·atomic·scenario·core/*` |
 | Skill | 17 | `/v3/skill/*` |
 | Knowledge details | 5 | `/v3/knowledge/*` |
 | Chat-Memory | 1 | `/v3/chat-memory/*` |
@@ -94,13 +94,13 @@ Different modules use different failure `message` formats, and the frontend has 
 | Internal Meta | 2 | `/v3/internal/meta/*` |
 | Instance Destroy | 1 | `/v3/instance/destroy` |
 
-**108 endpoints in total.**
+**109 endpoints in total.**
 
 ---
 
 ## 3. Endpoint details
 
-## 3.1 L0–L3 data plane (18)
+## 3.1 L0–L3 data plane (19)
 
 > Memory layers: L0 raw conversation (conversation), L1 memory atoms (atomic, of three kinds: episodic/persona/instruction), L2 scene files (scenario), L3 core persona (core).
 > Every endpoint takes the 4 ID isolation fields (`team_id/agent_id/user_id/task_id`, body or header).
@@ -182,6 +182,24 @@ L0 count (**v3 only, no v2 entry point**).
 **Response** `data`: `{ total: number }`.
 
 ---
+
+### POST /v3/atomic/add
+
+Writes one L1 memory directly, without LLM extraction (**v3 only**). Used by agents that decide a fact is worth remembering, e.g. through the memory MCP. The record belongs to the request's team + agent + user like an extracted memory, and the next L2 scene run picks it up.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| content | string | yes | 1–8192 characters, one standalone statement |
+| type | string | no | `work_fact` (default), `work_task`, `work_method`, `work_artifact`, `persona`, `episodic`, `instruction` |
+| priority | integer | no | -1–100, default 50 (same scale as extraction; -1 = strict global instruction) |
+| background | string | no | scene name to group it under (≤512) |
+| team_id / agent_id / user_id / task_id | string | team, agent, user: yes | isolation fields |
+
+**Response** `data`: `{ id, version: "v1", type, created_at }`.
+
+**Errors**: `400` (schema, or a missing team/agent/user), `503` (store unavailable). Not written to the audit table, which records only update/delete.
 
 ### POST /v3/atomic/update
 

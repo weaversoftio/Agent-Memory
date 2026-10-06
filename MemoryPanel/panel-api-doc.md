@@ -97,6 +97,7 @@ Every business endpoint returns:
 | POST | `/api/v1/chat-memory/layer` | lazy-loads the L0/L1/L2/L3 layers |
 | POST | `/api/v1/chat-memory/clear` | clears memory content in one step (keeps the asset) |
 | POST | `/api/v1/chat-memory/layer-delete` | batch delete per layer (L0/L1) |
+| POST | `/api/v1/chat-memory/layer-add` | add one L1 memory directly |
 | POST | `/api/v1/chat-memory/layer-update` | edit per layer (L1/L2/L3) |
 | POST | `/api/v1/chat-memory/search` | keyword search per layer (L0/L1) |
 | POST | `/api/v1/task/list-with-agents` | aggregated task list (with linked agents) |
@@ -583,6 +584,27 @@ Batch delete from the L0/L1 lists. **Asset owner only**.
 **Response**: the result of the kernel's `/v3/conversation/delete` or `/v3/atomic/delete`, passed through (with `deleted_count`).
 
 **Errors**: `MISSING_BLOCK_ID`, `INVALID_LAYER`, `NOT_AGENT_MEMORY`, `BLOCK_NOT_FOUND`, `NOT_CHAT_MEMORY`, `NOT_ASSET_OWNER`, `TOO_MANY_IDS`, `MISSING_IDS`, `LAYER_DELETE_FAILED`.
+
+### POST /chat-memory/layer-add
+
+Adds one L1 memory directly, without LLM extraction (e.g. from the memory MCP's `memory_add`). **Asset owner only**.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| block_id | string | yes | memory block ID (`chat_memory-{team}-{agent}`) |
+| layer | string | no | only `L1` (default) |
+| content | string | yes | the memory, one standalone statement |
+| type | string | no | `work_fact` (default), `work_task`, `work_method`, `work_artifact`, `persona`, `episodic`, `instruction` |
+| priority | number | no | -1–100, default 50 |
+| background | string | no | scene name to group it under |
+
+**Data source**: `/v3/atomic/add`.
+
+**Response**: the kernel result passed through: `{ id, version, type, created_at }`.
+
+**Errors**: `MISSING_BLOCK_ID`, `INVALID_LAYER`, `MISSING_CONTENT`, `NOT_AGENT_MEMORY`, `BLOCK_NOT_FOUND`, `NOT_CHAT_MEMORY`, `NOT_ASSET_OWNER`, `LAYER_ADD_FAILED`.
 
 ### POST /chat-memory/layer-update
 
@@ -1279,7 +1301,7 @@ The team's Code-Graph asset pool (same structure as `wiki/team-assets`, with `as
 | 400 | RANGE_TOO_LARGE | time filter range too large (the VDB can't support it) |
 | 403 | NOT_YOUR_AGENT / NOT_ASSET_OWNER / ASSET_NOT_SHARED / ASSET_NOT_ACCESSIBLE | permission denied |
 | 404 | BLOCK_NOT_FOUND / AGENT_NOT_FOUND / BINDING_NOT_FOUND | resource doesn't exist |
-| 500 | LAYER_FETCH_ERROR / CLEAR_FAILED / LAYER_DELETE_FAILED / LAYER_UPDATE_FAILED / SEARCH_FAILED | data-plane failure |
+| 500 | LAYER_FETCH_ERROR / CLEAR_FAILED / LAYER_DELETE_FAILED / LAYER_ADD_FAILED / LAYER_UPDATE_FAILED / SEARCH_FAILED | data-plane failure |
 
 **Knowledge**
 

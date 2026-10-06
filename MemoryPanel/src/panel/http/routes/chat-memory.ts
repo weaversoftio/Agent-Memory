@@ -28,6 +28,7 @@
  *   POST /chat-memory/unbind          从 agent 解绑
  *   POST /chat-memory/layer           L0/L1/L2/L3 分层懒加载
  *   POST /chat-memory/layer-delete    L0/L1 列表批量删除（Owner-only）
+ *   POST /chat-memory/layer-add       add one L1 memory directly (Owner-only)
  *   POST /chat-memory/clear           一键清空内容、保留资产（Owner-only）
  *   POST /chat-memory/import          导入历史对话到 agent 的 L0
  */
@@ -1559,6 +1560,80 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
           c,
           500,
           `LAYER_DELETE_FAILED: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+  );
+
+  // ==========================================================================
+  // POST /chat-memory/layer-add
+  //   body: { block_id, layer: 'L1', content, type?, priority?, background? }
+  //
+  // Adds one L1 memory directly (no LLM extraction), e.g. when an agent decides a
+  // fact is worth remembering. Owner-only, same rule as layer-update / layer-delete.
+  //   L1 → /v3/atomic/add { content, type?, priority?, background? }
+  // Other layers are built by the pipeline from L1 and can't be added directly.
+  // ==========================================================================
+  api.post(
+    "/chat-memory/layer-add",
+    validatePanelMetaHeaders(deps),
+    async (c) => {
+      const ctx = buildCtx(c);
+      const body = await readJson(c);
+      const blockId = requiredBlockId(body);
+      const layerRaw =
+        typeof body?.layer === "string" ? body.layer.toUpperCase() : "L1";
+      const content =
+        typeof body?.content === "string" ? body.content.trim() : "";
+
+      if (!blockId) return respondControlError(c, 400, "MISSING_BLOCK_ID");
+      if (layerRaw !== "L1") return respondControlError(c, 400, "INVALID_LAYER");
+      if (!content) return respondControlError(c, 400, "MISSING_CONTENT");
+
+      const parsed = parseChatMemoryAssetId(blockId);
+      if (!parsed) return respondControlError(c, 400, "NOT_AGENT_MEMORY");
+
+      const meUserId = await resolveCallerUserId(deps, ctx);
+      if (!meUserId) return respondControlError(c, 401, "INVALID_USER_KEY");
+
+      const assetEnv = await deps.metaKernel.invoke(
+        "asset/get",
+        { asset_id: blockId },
+        ctx,
+      );
+      if (assetEnv.code === 404 || (assetEnv.code === 0 && !assetEnv.data)) {
+        return respondControlError(c, 404, "BLOCK_NOT_FOUND");
+      }
+      if (assetEnv.code !== 0) return respondEnvelope(c, assetEnv);
+      const asset = assetEnv.data as AssetRaw;
+      if (asset.asset_type !== "chat_memory")
+        return respondControlError(c, 400, "NOT_CHAT_MEMORY");
+      if (asset.owner_user_id !== meUserId)
+        return respondControlError(c, 403, "NOT_ASSET_OWNER");
+
+      const payload: Record<string, unknown> = {
+        team_id: parsed.teamId,
+        agent_id: parsed.agentId,
+        user_id: asset.owner_user_id,
+        session_id: "default",
+        content,
+      };
+      if (typeof body?.type === "string") payload.type = body.type;
+      if (typeof body?.priority === "number") payload.priority = body.priority;
+      if (typeof body?.background === "string") payload.background = body.background;
+
+      try {
+        const env = await deps.kernelHttp.postEnvelope<unknown>(
+          "/v3/atomic/add",
+          payload,
+          toKernelCredentials(ctx, { timeoutMs: 30_000 }),
+        );
+        return respondEnvelope(c, env);
+      } catch (err) {
+        return respondControlError(
+          c,
+          500,
+          `LAYER_ADD_FAILED: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     },
