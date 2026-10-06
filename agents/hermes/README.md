@@ -1,109 +1,109 @@
 # Hermes
 
-> agentSource: `hermes` | 协议: OpenAI Chat Completions | Session Init: Header 预选（无交互 Form）
+> agentSource: `hermes` | protocol: OpenAI Chat Completions | session init: header preselection (no interactive form)
 >
-> 本地历史导入 Memory Hub：见 [资产导入手册](./asset-import.md)。
+> Importing local history into Memory Hub: see the [asset import manual](./asset-import.md).
 
 ---
 
-## 1. 客户端接入配置
+## 1. Client configuration
 
-Hermes 通过**配置文件** `~/.hermes/config.yaml` 配置：
+Hermes is configured through the **config file** `~/.hermes/config.yaml`:
 
 ```yaml
 model:
   default: gpt-5.5
   provider: custom
   base_url: http://<proxy-host>:8096/hermes/<spaceId>
-  api_key: <业务用户的 sk-mem-... user_key>
+  api_key: <the business user's sk-mem-... user_key>
   default_headers:
-    x-team-id: <从面板获取的 team_id>
-    x-agent-id: <从面板获取的 agent_id>
-    x-task-id: <从面板获取的 task_id>
-    x-conversation-id: <自定义的会话标识>
+    x-team-id: <team_id from the panel>
+    x-agent-id: <agent_id from the panel>
+    x-task-id: <task_id from the panel>
+    x-conversation-id: <your own conversation identifier>
 ```
 
-字段说明：
-- `base_url` — Proxy 地址 + `/hermes/<spaceId>`；`default` 是 memory 实例 ID
-- `api_key` — 业务用户的 `user_key`（从面板获取）
-- `x-team-id` / `x-agent-id` / `x-task-id` — 从面板对应页面获取
-- `x-conversation-id` — 用户自定义会话标识（见下方 §6 已知限制）
+Fields:
+- `base_url`: proxy address + `/hermes/<spaceId>`; `default` is the memory instance ID
+- `api_key`: the business user's `user_key` (from the panel)
+- `x-team-id` / `x-agent-id` / `x-task-id`: from the matching panel pages
+- `x-conversation-id`: your own conversation identifier (see §6 known limitations below)
 
-请求路径：`POST /hermes/:spaceId/v1/chat/completions`
+Request path: `POST /hermes/:spaceId/v1/chat/completions`
 
 ---
 
 ## 2. Session ID
 
-| 来源 | Header |
+| Source | Header |
 |------|--------|
-| 唯一 | `x-conversation-id`（用户在配置文件中静态指定） |
+| only | `x-conversation-id` (set statically by the user in the config file) |
 
-⚠️ Hermes 不自动管理 session ID，需要用户每次新对话手动更换 `x-conversation-id`。
+⚠️ Hermes doesn't manage session IDs; the user has to change `x-conversation-id` by hand for each new conversation.
 
 ---
 
-## 3. Session Init（会话初始化）
+## 3. Session init
 
-### ⚠️ 核心差异：纯 Header 预选，无交互 Form
+### ⚠️ Key difference: header preselection only, no interactive form
 
-Hermes **不支持交互式表单**（客户端无法响应 proxy 返回的 function_call）。  
-Session 注册完全依赖请求中携带的 Header：
+Hermes **doesn't support interactive forms** (the client can't answer a function_call returned by the proxy).  
+Session registration relies entirely on headers sent with the request:
 
-| Header | 说明 | 必填 |
+| Header | Description | Required |
 |--------|------|------|
-| `x-team-id` | 团队 ID | ✅ |
+| `x-team-id` | team ID | ✅ |
 | `x-agent-id` | Agent ID | ✅ |
-| `x-task-id` | Task ID | ✅（当前版本） |
-| `x-conversation-id` | 会话标识 | ✅ |
+| `x-task-id` | task ID | ✅ (current version) |
+| `x-conversation-id` | conversation identifier | ✅ |
 
-**处理逻辑**：
-- 四个 header 都存在且 valid → 直接注册 session，注入资产
-- 任一缺失 → session bypass（透传，不注入）
+**Handling**:
+- all four headers present and valid → the session is registered directly and assets are injected
+- any of them missing → session bypass (pass-through, no injection)
 
-### 无 Plan Mode / Default Mode
+### No plan mode / default mode
 
-Hermes 不涉及 Plan/Default mode 概念。要么 header 齐全走完整链路，要么 bypass。
-
----
-
-## 4. 请求分类
-
-所有请求均为 **main**。Hermes 没有 auxiliary 请求概念。
+Hermes has no plan/default mode. Either the headers are complete and the full chain runs, or it bypasses.
 
 ---
 
-## 5. 注入 Profile
+## 4. Request classification
 
-与 CB 相同——XML 结构注入到 `messages[0].content`（system message）。
-
----
-
-## 6. 已知限制
-
-### `x-task-id` 当前必填
-
-Proxy 的 header 预选机制要求三 ID 齐全才能完成 session 注册。缺少 `x-task-id` 时 proxy 尝试弹 form，但 Hermes 无法响应 → session bypass → 记忆注入不生效。
-
-**影响**：
-- 用户需预先在面板创建 Task 并获取 task_id
-- 切换任务需手动改配置文件
-
-### `x-conversation-id` 需手动管理
-
-- 同一个 conversation ID 的所有请求共享同一个 session
-- 每次新对话需手动更换（否则沿用上次 session 状态）
-- 部分客户端 tool call 后续请求可能不携带 extra headers → 那些轮次跳过注入
+Every request is **main**. Hermes has no auxiliary requests.
 
 ---
 
-## 7. 常见问题
+## 5. Injection profile
 
-**Q: 记忆注入没生效？**  
-A: 检查 `extra_headers` 四个值是否都填了且正确。任一缺失/错误都会导致 session bypass。
+Same as CB: XML structure injected into `messages[0].content` (the system message).
 
-**Q: 怎么获取 team_id / agent_id / task_id？**  
-A: 登录面板 → 对应页面 → 详情里有 ID 字段。或用面板 API `team/list`、`agent/list`、`task/list` 查询。
+---
 
-**Q: 不想绑 Task 怎么办？**  
-A: 当前版本必填。可在 proxy `config.yaml` 配置 `sessionInit.defaultTaskId: "no-task"` 后使用该固定值。
+## 6. Known limitations
+
+### `x-task-id` is currently required
+
+The proxy's header preselection needs all three IDs to register the session. Without `x-task-id` the proxy tries to show the form, but Hermes can't answer it → session bypass → no memory injection.
+
+**Impact**:
+- the user has to create a task in the panel first and get its task_id
+- switching tasks means editing the config file by hand
+
+### `x-conversation-id` has to be managed by hand
+
+- all requests with the same conversation ID share one session
+- change it by hand for every new conversation (otherwise the previous session state carries over)
+- some clients don't send the extra headers on the requests that follow a tool call → those turns skip injection
+
+---
+
+## 7. FAQ
+
+**Q: Memory injection doesn't work?**  
+A: Check that all four header values are filled in and correct. Any missing/wrong value causes a session bypass.
+
+**Q: How do I get the team_id / agent_id / task_id?**  
+A: Log in to the panel → the matching page → the ID field in the details. Or query the panel API `team/list`, `agent/list`, `task/list`.
+
+**Q: What if I don't want to bind a task?**  
+A: It's required in the current version. You can set `sessionInit.defaultTaskId: "no-task"` in the proxy `config.yaml` and use that fixed value.

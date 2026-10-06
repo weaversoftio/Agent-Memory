@@ -1,63 +1,63 @@
-# Hermes 资产导入
+# Hermes asset import
 
-把本机 Hermes Agent 的 **skill / session** 导入 Memory Hub。这一份手册即可完成。
+Imports this machine's Hermes Agent **skills / sessions** into Memory Hub. This one manual is all you need.
 
 
-数据根 `$HERMES_HOME`（默认 `~/.hermes`）。Session 读 SQLite，需要 **Node >= 22**（`node:sqlite`）。
+Data root: `$HERMES_HOME` (default `~/.hermes`). Sessions are read from SQLite, which needs **Node >= 22** (`node:sqlite`).
 
-## 扫什么
+## What gets scanned
 
-**Skill**（同名：全局覆盖仓库内置；含 `SKILL.md` 的子目录，允许更深分类如 `mlops/inference/llama-cpp`）
+**Skill** (for duplicate names the global one overrides the repository's built-in one; any subdirectory containing `SKILL.md`, deeper categories such as `mlops/inference/llama-cpp` allowed)
 
-| 优先级 | 路径 |
+| Priority | Path |
 |---|---|
 | 1 | `$HERMES_HOME/skills/<category>/<name>/SKILL.md` |
-| 2 | `<hermes-agent 仓库>/skills/` |
-| 3 | `<hermes-agent 仓库>/optional-skills/` |
+| 2 | `<hermes-agent repository>/skills/` |
+| 3 | `<hermes-agent repository>/optional-skills/` |
 
-仓库根：`HERMES_AGENT_ROOT`，否则 `$HERMES_HOME/hermes-agent`。也认 `HERMES_BUNDLED_SKILLS` / `HERMES_OPTIONAL_SKILLS`。
+Repository root: `HERMES_AGENT_ROOT`, otherwise `$HERMES_HOME/hermes-agent`. `HERMES_BUNDLED_SKILLS` / `HERMES_OPTIONAL_SKILLS` are honoured too.
 
-不扫：项目 `.hermes/skills` / `.agents/skills`、`skills.external_dirs`、`.hub`、pending、`references/` 里嵌套的 `SKILL.md`。
+Not scanned: project `.hermes/skills` / `.agents/skills`, `skills.external_dirs`, `.hub`, pending, `SKILL.md` files nested inside `references/`.
 
-**Memory**：不再扫描本地文件；memory 仅由 Session 抽取（见下）。
+**Memory**: local files are no longer scanned; memory is only extracted from sessions (see below).
 
 **Session**
 
-| 存储 | 路径 | 是否导入 |
+| Storage | Path | Imported? |
 |---|---|---|
-| 主库 | `$HERMES_HOME/state.db` | 是：`sessions` 元数据 + `messages` 的 `user`/`assistant` |
-| 原始 dump | `$HERMES_HOME/sessions/request_dump_*.json` | 否 |
+| main database | `$HERMES_HOME/state.db` | yes: `sessions` metadata + `user`/`assistant` rows of `messages` |
+| raw dumps | `$HERMES_HOME/sessions/request_dump_*.json` | no |
 
-不扫 `session_{sid}.json`、`moa-traces/`。`--workspace` 不限定 session。低于 Node 22 时 session 扫描会跳过。
+`session_{sid}.json` and `moa-traces/` are not scanned. `--workspace` doesn't restrict sessions. Below Node 22 the session scan is skipped.
 
-## 前置
+## Prerequisites
 
-在仓库根执行：
+Run from the repository root:
 
 ```bash
 export PANEL_URL=http://127.0.0.1:8123
 export TDAI_SERVICE_ID=<spaceId>
-export TDAI_USER_KEY=<该 agent owner 的 sk-mem-...>
-# 可选：HERMES_HOME / HERMES_AGENT_ROOT
+export TDAI_USER_KEY=<the sk-mem-... key of the agent's owner>
+# optional: HERMES_HOME / HERMES_AGENT_ROOT
 ```
 
-`--agent-id` / `--team-id` 必填。若 skill 在仓库 `optional-skills/`，把 `--workspace` 指到 hermes-agent 仓库根，或设 `HERMES_AGENT_ROOT`。
+`--agent-id` / `--team-id` are required. If the skills are in the repository's `optional-skills/`, point `--workspace` at the hermes-agent repository root or set `HERMES_AGENT_ROOT`.
 
-## 用法
+## Usage
 
-统一入口为仓库根 `agents/asset-import.ts`。用 `--source hermes` 指定本手册对应的 IDE；省略时默认 `auto` 自动识别当前工作区所用 IDE。
+The shared entry point is `agents/asset-import.ts` at the repository root. `--source hermes` selects the IDE this manual is for; without it the default `auto` detects the IDE used in the current workspace.
 
 ```bash
-# 交互式导入：先列举待导入项 —— skill（编号/名称/描述/来源/关联脚本数）、session（id/时间范围/项目路径），再选择「全导入 / 不导入 / 部分导入」（部分导入可填编号或 ID，逗号/空格分隔，可多个）
+# Interactive import: first lists what can be imported (skills: number/name/description/source/script count; sessions: id/time range/project path), then asks "import all / import none / import some" (for some, enter numbers or IDs separated by commas/spaces)
 tsx agents/asset-import.ts --source hermes --agent-id <id> --team-id <tid>
 
-# 非交互（脚本/CI，直接全量导入，不询问）
+# Non-interactive (scripts/CI: imports everything without asking)
 tsx agents/asset-import.ts --source hermes --agent-id <id> --team-id <tid> -y
 
-# 指定项目目录
+# Use a specific project directory
 tsx agents/asset-import.ts --source hermes --workspace /path/to/hermes-agent --agent-id <id> --team-id <tid>
 
-# 重新导入（忽略断点续传，重导已导入项）
+# Re-import (ignore resume state and re-import items already imported)
 tsx agents/asset-import.ts --source hermes --agent-id <id> --team-id <tid> --force
 
 ```
