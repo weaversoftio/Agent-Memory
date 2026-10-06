@@ -1,204 +1,206 @@
-# TDAI 全局镜像本地部署
+# TDAI global images: local deployment
 
-全局三件套镜像的本地拉起脚本 —— `memory-core` + `memory-hub` + `proxy`，可各自独立运行，也能一条命令全部启动。
+Scripts to run the three global images locally — `memory-core` + `memory-hub` + `proxy`. Each can run on its own, or all three start with one command.
 
-## 组件与端口
+## Components and ports
 
-| 组件 | 容器名 | 镜像（Docker Hub 公开） | 宿主机端口 | 用途 |
+| Component | Container | Image (public on Docker Hub) | Host port | Purpose |
 |---|---|---|---|---|
-| **memory-core** | `tdai-memory-core` | [`agentmemory/memory-core`](https://hub.docker.com/r/agentmemory/memory-core) | `8420` | 内核 gateway，记忆读写、鉴权、skill/RAG 数据面 |
-| **memory-hub**  | `tdai-memory-hub`  | [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)   | `8125` / `8424` | 管理面板 (Panel) + 知识服务 (Knowledge) 合并镜像 |
-| **proxy**       | `tdai-proxy`       | [`agentmemory/memory-proxy`](https://hub.docker.com/r/agentmemory/memory-proxy) | `8096` | LLM 请求转发代理，coding agent 的 API 入口 |
+| **memory-core** | `tdai-memory-core` | [`agentmemory/memory-core`](https://hub.docker.com/r/agentmemory/memory-core) | `8420` | Kernel gateway: memory read/write, auth, skill/RAG data plane |
+| **memory-hub**  | `tdai-memory-hub`  | [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)   | `8125` / `8424` | Combined image: admin panel (Panel) + knowledge service (Knowledge) |
+| **proxy**       | `tdai-proxy`       | [`agentmemory/memory-proxy`](https://hub.docker.com/r/agentmemory/memory-proxy) | `8096` | LLM request proxy, the API entry point for coding agents |
 
-> 三个镜像都发布在 Docker Hub 的 [`agentmemory`](https://hub.docker.com/u/agentmemory) 命名空间下，
-> 多架构（`linux/amd64` + `linux/arm64`），公开可拉、无需登录。想固定版本时把 `.env` 里的 tag 从
-> `:latest` 换成具体版本即可，例如 `:1.0.0-beta.1`。
+> All three images are published in the [`agentmemory`](https://hub.docker.com/u/agentmemory) namespace on Docker Hub,
+> multi-arch (`linux/amd64` + `linux/arm64`), public and pullable without login. To pin a version, change the tag in `.env`
+> from `:latest` to a specific version, e.g. `:1.0.0-beta.1`.
 >
-> 腾讯内部同事也可以覆盖到内网私仓 `mirrors.tencent.com/memory-team-control/` —— 见 `.env.example` 里
-> 注释掉的备选块。
+> Tencent colleagues can also override them with the internal registry `mirrors.tencent.com/memory-team-control/` — see the
+> commented-out alternative block in `.env.example`.
 
-## 环境要求
+## Requirements
 
-- macOS / Linux
-- Docker（Docker Desktop / colima / OrbStack 任一）
-- `bash` 4+（macOS 自带 3.2 也能跑）
+- macOS / Linux, or Windows with Git Bash
+- Docker (Docker Desktop / colima / OrbStack)
+- `bash` 4+ (macOS's built-in 3.2 also works)
 
-## 快速开始
+## Quick start
 
 ```bash
 cd Agent-Memory/deploy/global-images
 
-# 一条命令：自动复制 .env → 交互式填 LLM → 自动校验通路 → 拉起三件套
+# One command: copy .env → fill in the LLM interactively → check the connection → start all three
 ./start-all.sh
 ```
 
-`start-all.sh` 现在是**交互式**的，运行时会：
+`start-all.sh` is **interactive**. When you run it, it:
 
-1. `.env` 不存在时，自动从 `.env.example` 复制一份（无需手动 `cp`）
-2. 引导你填写两组 LLM（**回车 = 保留当前默认值**）：
-   - `memory 组`：`BASE_URL` / `API_KEY` / `MODEL`（协议默认 `openai`）
-   - `proxy 组`：先问「是否复用 memory 组配置」，复用则跳过
-3. 填完**立即检查 LLM 通路是否通**，不通会提示重新输入，直到通过
-4. 把填写值**写回 `.env`** 持久化（下次启动默认复用）
-5. 通过后一键拉起三件套
+1. copies `.env.example` to `.env` if `.env` doesn't exist (no manual `cp` needed)
+2. asks for the two LLM groups (**Enter = keep the current default**):
+   - `memory group`: `BASE_URL` / `API_KEY` / `MODEL` (protocol defaults to `openai`)
+   - `proxy group`: first asks "Should the proxy use the same LLM settings as memory?"; if yes, it's skipped
+3. **checks the LLM connection right away**; if it fails you're asked again, until it passes
+4. **writes the values back to `.env`** (reused by default next time)
+5. starts all three once the check passes
 
-> 想跳过交互、直接读 `.env` 也可以：手动 `cp .env.example .env` 并填好 LLM 后，
-> 运行 `./start-all.sh` 一路回车确认即可（默认值就是 `.env` 里的值）。
+> To skip the questions and just use `.env`: run `cp .env.example .env` yourself, fill in the LLM settings,
+> then run `./start-all.sh` and press Enter at every prompt (the defaults are the values from `.env`).
 
-### MongoDB 存储后端（试验特性，可选）
+### MongoDB storage backend (experimental, optional)
 
-默认存储仍是 **sqlite**（零依赖，数据落容器卷）。MongoDB 数据面是**试验特性**，
-默认关闭，不建议作为生产默认后端。开启后走 L0/L1/profile/skill 文档 + mongot
-原生 BM25 检索，元数据默认同步落 Mongo：
-
-```bash
-./start-all-mongo.sh    # 与 start-all.sh 流程完全一致；写入 MEMORY_CORE_STORE_MODE=mongodb 到 .env
-```
-
-- 脚本会把 `MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后 `./start-all.sh`
-  也会保持 MongoDB，不会静默回退到 sqlite。要回 sqlite：注释掉该行或改为
-  `sqlite`，再跑 `./start-all.sh`；
-- 未设 `MONGODB_ENDPOINT` 时，脚本会自动起一个本地 `mongodb-atlas-local` 容器
-  （mongod + mongot 一体，**不是**云上 Atlas；数据卷 `mongo-local-*` 持久化，
-  `stop-all.sh --purge` 一并清理）；
-- 想用外部 Mongo（云 Atlas / 自建带 mongot 的副本集），在 `.env` 填
-  `MONGODB_ENDPOINT` 即可；
-- **切换存储后端不会迁移已有数据。** sqlite 在 `MEMORY_CORE_VOLUME` 卷，mongo
-  在 `mongo-local-*` 卷（或外部实例），切换后原数据仍留在原后端。当前版本需
-  自行备份并手工迁移；后续版本将提供官方迁移工具。L2/L3 文件两种模式都在
-  `MEMORY_CORE_VOLUME` 卷。
-
-### 干跑校验（可选）
-
-`verify.sh` 仍可单独使用，只检查环境不启动容器：
+The default storage is still **sqlite** (no dependencies, data in a container volume). The MongoDB data plane is **experimental**,
+off by default, and not recommended as the production default. When on, it stores L0/L1/profile/skill documents with mongot
+native BM25 search, and metadata goes to Mongo too by default:
 
 ```bash
-./verify.sh              # 默认全检（含 LLM 通路预检）
-./verify.sh --skip-llm   # 跳过 LLM 检查（离线环境）
+./start-all-mongo.sh    # same flow as start-all.sh; writes MEMORY_CORE_STORE_MODE=mongodb to .env
 ```
 
-## LLM 通路预检
+- The script writes `MEMORY_CORE_STORE_MODE=mongodb` into `.env`, so later `./start-all.sh` runs
+  also stay on MongoDB instead of silently falling back to sqlite. To go back to sqlite, comment that line out or set it to
+  `sqlite`, then run `./start-all.sh`;
+- Without `MONGODB_ENDPOINT`, the script starts a local `mongodb-atlas-local` container
+  (mongod + mongot in one — **not** cloud Atlas; data persisted in the `mongo-local-*` volumes,
+  which `stop-all.sh --purge` also cleans up);
+- To use an external Mongo (cloud Atlas / a self-hosted replica set with mongot), set
+  `MONGODB_ENDPOINT` in `.env`;
+- **Switching storage backends doesn't migrate existing data.** sqlite lives in the `MEMORY_CORE_VOLUME` volume, mongo
+  in the `mongo-local-*` volumes (or the external instance); after switching, the old data stays in the old backend. For now,
+  back it up and migrate it by hand; an official migration tool is planned. L2/L3 files live in the
+  `MEMORY_CORE_VOLUME` volume in both modes.
 
-`verify.sh` 默认会预检两组 LLM 通路（`--skip-llm` 关掉）：
+### Dry-run check (optional)
 
-- **OpenAI 兼容协议**：`GET {base}/models`，只验证 API key + URL，**不消耗任何 token**
-- **Anthropic 协议**：`POST {base}/v1/messages` 发 `max_tokens=1` 的最小消息，消耗 ≤ 10 token
-- **memory 组** 与 **proxy 组** 独立验；若两组配置完全相同，自动跳过重复检查
-- **容器已运行时**，额外从容器内 exec 一次 curl，验证"容器 → LLM"的网络可达性（一些企业代理/DNS 隔离环境下宿主机可达但容器不可达）
+`verify.sh` can still be used on its own; it checks the environment without starting containers:
 
-失败例子：
+```bash
+./verify.sh              # full check by default (including the LLM connection pre-check)
+./verify.sh --skip-llm   # skip the LLM check (offline)
+```
+
+## LLM connection pre-check
+
+`verify.sh` checks both LLM groups by default (`--skip-llm` turns this off):
+
+- **OpenAI-compatible protocol**: `GET {base}/models` — only verifies the API key + URL and **uses no tokens**
+- **Anthropic protocol**: `POST {base}/v1/messages` with a minimal `max_tokens=1` message, using ≤ 10 tokens
+- The **memory group** and **proxy group** are checked separately; if both are identical, the second check is skipped
+- **If the containers are running**, curl is also run once from inside the container, to check "container → LLM" reachability (in some corporate proxy / DNS-isolated setups the host can reach the LLM but the container can't)
+
+A failing example:
 
 ```
-[error] memory 组 API key 无效（HTTP 401）：https://api.deepseek.com/v1/models
+[error] memory LLM API key is invalid (HTTP 401): https://api.deepseek.com/v1/models
 {"error":{"message":"Authentication Fails, Your api key: ****abcd is invalid",...}}
 ```
 
-—— API key 错、URL 错、模型名错都会在启动前拦下，不会等到 wiki ingest / chat 时才 401。
+— a wrong API key, URL or model name is caught before startup, instead of surfacing as a 401 during wiki ingest or chat.
 
-启动完成后：
+When startup is done:
 
-- Panel UI：<http://localhost:8125/>
-- Knowledge API：<http://localhost:8424/v3/>
-- Knowledge Swagger：<http://localhost:8424/docs>
-- Memory Gateway：<http://localhost:8420/>
-- Proxy：<http://localhost:8096/>
+- Panel UI: <http://localhost:8125/>
+- Knowledge API: <http://localhost:8424/v3/>
+- Knowledge Swagger: <http://localhost:8424/docs>
+- Memory Gateway: <http://localhost:8420/>
+- Proxy: <http://localhost:8096/>
 
-## 两组独立参数
+## Two independent groups of settings
 
-**这是脚本设计的核心** —— memory 组和 proxy 组的 LLM 完全独立，可以指向不同供应商 / 不同模型。
+**This is the core of the script design** — the memory group's and the proxy group's LLMs are completely independent and can point to different providers / models.
 
-### memory 组（memory-core + memory-hub 使用）
+### memory group (used by memory-core + memory-hub)
 
-内核记忆 embed/summarize、knowledge 的 wiki ingest / 总结走这组配置。
+Kernel memory embed/summarize and knowledge's wiki ingest / summaries use this group.
 
-| 变量 | 说明 | 示例 |
+| Variable | Description | Example |
 |---|---|---|
-| `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1` |
-| `MEMORY_LLM_API_KEY` | 上述端点的 API Key | `sk-xxxxxxxx` |
-| `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat` |
-| `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai` | `openai` |
+| `MEMORY_LLM_BASE_URL` | OpenAI-compatible base URL | `https://api.deepseek.com/v1` |
+| `MEMORY_LLM_API_KEY` | API key for that endpoint | `sk-xxxxxxxx` |
+| `MEMORY_LLM_MODEL` | Model ID | `deepseek-chat` |
+| `MEMORY_LLM_PROTOCOL` | `openai` or `anthropic`, default `openai` | `openai` |
 
-### proxy 组（proxy 使用）
+### proxy group (used by the proxy)
 
-proxy 接到用户请求后转发到这组端点。
+The proxy forwards user requests to this endpoint.
 
-| 变量 | 说明 | 示例 |
+| Variable | Description | Example |
 |---|---|---|
-| `PROXY_UPSTREAM_URL` | 转发目标 base URL | `https://api.deepseek.com/v1` |
-| `PROXY_UPSTREAM_API_KEY` | 转发用 API Key | `sk-xxxxxxxx` |
-| `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-chat` |
+| `PROXY_UPSTREAM_URL` | Base URL to forward to | `https://api.deepseek.com/v1` |
+| `PROXY_UPSTREAM_API_KEY` | API key for forwarding | `sk-xxxxxxxx` |
+| `PROXY_UPSTREAM_MODEL` | Model ID users see | `deepseek-chat` |
 
-> 两组可以填相同值（都指向同一个 LLM），也可以完全不同：例如 memory 组用便宜模型做 embedding，proxy 组用强模型做主对话。
-
-参数缺失时脚本会**在启动前一次性列出所有缺失项**并 `exit 1`，不会跑到一半才失败。
-
-## 记忆提示词模式（chat / code）
-
-memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族：
-
-| 模式 | `.env` 值 | 抽取内容 | L3 产物 | 适用场景 |
-|---|---|---|---|---|
-| **code**（默认） | `MEMORY_PROMPT_MODE=code` | 项目事实 / 任务 / 决策 / SOP / 禁忌 | Team Operating Doctrine | coding agent、团队协作、工程项目 |
-| chat | `MEMORY_PROMPT_MODE=chat` | persona / episodic / instruction | persona.md（个人画像） | 个人助手、闲聊、教学 |
-
-> **注意**：`code` 模式下纯闲聊可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。如果 L1 一直没产出，先检查 `MEMORY_PROMPT_MODE` 是否与实际对话场景匹配。
-
-## 内部凭据（生产环境必看）
-
-三件套之间用 `MEMORY_CORE_GATEWAY_API_KEY` 互相认证，首次启动还会通过
-`init-admin` 建一个 `system_admin` 账户。为了**零配置本地体验**，脚本默认值是：
-
-| 变量 | 默认值 | 用途 |
-|---|---|---|
-| `MEMORY_CORE_GATEWAY_API_KEY` | `local` | memory-hub / proxy → memory-core 的 Bearer |
-| `MEMORY_CORE_ADMIN_USERNAME` | `admin` | 初始化的 system_admin 用户名 |
-| `MEMORY_CORE_ADMIN_USER_KEY` | `admin` | 该 admin 用户的登录 key |
-| `KNOWLEDGE_SERVICE_KEY` | **自动生成随机值** | Panel ↔ Knowledge 服务间 Bearer（写/管理端点强制） |
-
-> `KNOWLEDGE_SERVICE_KEY` 不留固定默认值：首次启动时脚本自动生成 `ks-svc-*` 随机串
-> 并写回 `.env`（重启复用不漂移），同一个值注入 memory-hub 容器两次——
-> `KNOWLEDGE_SERVICE_KEY`（Knowledge 校验侧）+ `KNOWLEDGE_AUTH_TOKEN`（Panel 调用侧）。
-> 如需自行分发（多机/外部编排），在 `.env` 显式设置即可，脚本尊重既有值。
-
-> 这三个默认值只适合个人本地跑通流程。**生产/联调/公网暴露前必须替换成随机长串**，
-> 否则任何拿到端口的人都能拿到 system_admin 权限。
+> Both groups can have the same values (pointing at the same LLM) or be completely different: e.g. a cheap model for embedding in the memory group and a strong model for the main conversation in the proxy group.
 >
-> 在 `.env` 里取消对应三行的注释并覆盖即可（`_lib.sh` 会 `require_vars`
-> 校验其他必填项，但这三个变量因为有默认兜底，脚本会在启动时打 `[warn]` 提醒你换）。
+> Claude Code speaks the Anthropic format and the proxy forwards requests unchanged, so for Claude Code the proxy group must point at an Anthropic-compatible endpoint — e.g. a LiteLLM gateway (`http://host.docker.internal:4000/v1` for a LiteLLM running on the host), which also translates to OpenAI models.
 
-## 独立使用每个组件
+When settings are missing, the script **lists every missing one at once before starting** and exits with code 1, instead of failing halfway through.
 
-三个脚本可以单独执行，方便调试或只需要部分能力时：
+## Memory prompt mode (chat / code)
+
+memory-core switches the prompt family of the L1/L2/L3 pipeline with `MEMORY_PROMPT_MODE`:
+
+| Mode | `.env` value | Extracts | L3 output | Fits |
+|---|---|---|---|---|
+| **code** (default) | `MEMORY_PROMPT_MODE=code` | project facts / tasks / decisions / SOPs / taboos | Team Operating Doctrine | coding agents, team collaboration, engineering projects |
+| chat | `MEMORY_PROMPT_MODE=chat` | persona / episodic / instruction | persona.md (personal profile) | personal assistants, chit-chat, teaching |
+
+> **Note**: in `code` mode pure small talk may extract 0 memories (the LLM finds no engineering content worth keeping). If L1 never produces anything, first check that `MEMORY_PROMPT_MODE` matches how the conversations are actually used.
+
+## Internal credentials (read before production)
+
+The three services authenticate to each other with `MEMORY_CORE_GATEWAY_API_KEY`, and the first start also creates a
+`system_admin` account through `init-admin`. For a **zero-config local setup**, the script defaults are:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMORY_CORE_GATEWAY_API_KEY` | `local` | Bearer for memory-hub / proxy → memory-core |
+| `MEMORY_CORE_ADMIN_USERNAME` | `admin` | Username of the initialised system_admin |
+| `MEMORY_CORE_ADMIN_USER_KEY` | `admin` | Login key of that admin user |
+| `KNOWLEDGE_SERVICE_KEY` | **random value, generated automatically** | Panel ↔ Knowledge service Bearer (required on write/admin endpoints) |
+
+> `KNOWLEDGE_SERVICE_KEY` has no fixed default: on first start the script generates a random `ks-svc-*` string
+> and writes it back to `.env` (reused across restarts), and injects the same value into the memory-hub container twice —
+> `KNOWLEDGE_SERVICE_KEY` (checked by Knowledge) + `KNOWLEDGE_AUTH_TOKEN` (sent by Panel).
+> To distribute it yourself (multi-machine / external orchestration), set it explicitly in `.env`; the script respects an existing value.
+
+> These three defaults are only for running things on your own machine. **Before production / shared testing / any public exposure, replace them with long random strings**,
+> otherwise anyone who reaches the ports gets system_admin rights.
+>
+> Uncomment the three lines in `.env` and override them (`_lib.sh` uses `require_vars` to
+> check the other required settings; these three have fallback defaults, so the script prints a `[warn]` at startup reminding you to change them).
+
+## Using each component on its own
+
+The three scripts can run separately, for debugging or when you only need part of the stack:
 
 ```bash
-./start-memory-core.sh       # 只跑内核 gateway（8420）
-./start-memory-hub.sh   # 只跑面板 + 知识（8125 + 8424）；需要 MEMORY_LLM_* 参数
-./start-proxy.sh        # 只跑 proxy（8096）；需要 PROXY_UPSTREAM_* 参数
+./start-memory-core.sh  # only the kernel gateway (8420)
+./start-memory-hub.sh   # only panel + knowledge (8125 + 8424); needs the MEMORY_LLM_* settings
+./start-proxy.sh        # only the proxy (8096); needs the PROXY_UPSTREAM_* settings
 ```
 
-依赖关系：
+Dependencies:
 
-- **memory-core**：无外部依赖，可以独立起
-- **memory-hub**：能独立启动（LLM_MODE=custom 直连 LLM），但内部 knowledge 调 memory-core 做 RAG 时会失败 → 建议 memory-core 先起
-- **proxy**：能独立启动（cost-guard 不可用时自动降级 passthrough，直接转发），但 auth / tdai memory / skill 注入需要 memory-core 才有效
+- **memory-core**: no outside dependencies, can start on its own
+- **memory-hub**: can start on its own (LLM_MODE=custom connects to the LLM directly), but the knowledge service's RAG calls to memory-core fail → start memory-core first
+- **proxy**: can start on its own (falls back to plain passthrough when cost-guard is unavailable), but auth / tdai memory / skill injection need memory-core to work
 
-任意组件缺失时脚本会 `warn` 提醒但不阻塞。
+When a component is missing, the scripts `warn` about it but don't block.
 
-## 数据持久化
+## Data persistence
 
-- `tdai-memory-core-data`（named volume）→ memory-core 的 SQLite / 记忆数据
-- `tdai-panel-data`（named volume）→ memory-hub 里 knowledge 的 SQLite / git clone / wiki 文件
+- `tdai-memory-core-data` (named volume) → memory-core's SQLite / memory data
+- `tdai-panel-data` (named volume) → the knowledge service's SQLite / git clones / wiki files in memory-hub
 
-`docker volume rm` 之前数据一直保留。改名可在 `.env` 里改 `MEMORY_CORE_VOLUME` / `PANEL_VOLUME`。
+Data stays until you `docker volume rm` it. Rename the volumes with `MEMORY_CORE_VOLUME` / `PANEL_VOLUME` in `.env`.
 
-## 停止 / 清理
+## Stop / clean up
 
 ```bash
-./stop-all.sh            # 停容器，保留 volume（下次启动数据还在）
-./stop-all.sh --purge    # 停容器 + 删 volume + 删网络（彻底清理）
+./stop-all.sh            # stop the containers, keep the volumes (data is still there next time)
+./stop-all.sh --purge    # stop the containers + delete the volumes + delete the network (full cleanup)
 ```
 
-## 查看日志
+## Logs
 
 ```bash
 docker logs -f tdai-memory-core
@@ -206,53 +208,53 @@ docker logs -f tdai-memory-hub
 docker logs -f tdai-proxy
 ```
 
-memory-hub 内部有两个进程（panel + knowledge），日志分别在容器内 `/data/knowledge/logs/panel.log` 和 `.../knowledge.log`。
+memory-hub runs two processes (panel + knowledge); inside the container their logs are `/data/knowledge/logs/panel.log` and `.../knowledge.log`.
 
-## 端口冲突
+## Port conflicts
 
-如果 `8125` / `8420` / `8424` / `8096` 与本地已有服务冲突，直接在 `.env` 改：
+If `8125` / `8420` / `8424` / `8096` clash with services already running locally, change them in `.env`:
 
 ```bash
 MEMORY_CORE_PORT=18420
 PANEL_PORT=18125
 KNOWLEDGE_PORT=18424
 PROXY_PORT=18096
-# knowledge 对外可达地址要跟着 KNOWLEDGE_PORT 走
+# the externally reachable knowledge address must follow KNOWLEDGE_PORT
 KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:18424/v3
 ```
 
-## 使用 proxy 作为 coding agent 的 API base
+## Using the proxy as a coding agent's API base
 
-以 Claude Code 为例：
+For example, Claude Code:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://localhost:8096
-export ANTHROPIC_API_KEY=any-string-if-auth-disabled
-# 使用 openai 协议的客户端类似：OPENAI_BASE_URL=http://localhost:8096/v1
+export ANTHROPIC_BASE_URL=http://localhost:8096/claude-code/default
+export ANTHROPIC_AUTH_TOKEN="$(cat .admin-key)"
+# OpenAI-protocol clients are similar: OPENAI_BASE_URL=http://localhost:8096/<agent>/default/v1
 ```
 
-Panel UI "客户端接入地址" 卡片会自动拼上宿主机的 LAN IP + `PROXY_PORT`（例如
-`http://192.168.1.100:8096/codebuddy/default`），别人的电脑复制过去就能直接连过来。
-由 `MEMORY_HUB_PROXY_PUBLIC_URL`（未设时脚本用 `hostname -I` / macOS `ipconfig getifaddr en0`
-自动探测，探不到才回落 `localhost`）注入到 memory-hub 里的 `metadata-instances.json.proxy_endpoint`。
-Panel 后端 → Kernel 的转发不受此变量影响（始终走 `REMOTE_INSTANCE_URL` → memory-core:8420）。
-自动探测的地址不对时（多网卡 / 公网域名 / 反代前置），在 `.env` 显式设
-`MEMORY_HUB_PROXY_PUBLIC_URL=http://<真值>:8096`。想让 UI 卡片走老行为（回落到
-gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串。
+The panel's "client connection" card automatically uses the host's LAN IP + `PROXY_PORT` (e.g.
+`http://192.168.1.100:8096/codebuddy/default`), so other people's machines can copy it and connect directly.
+It comes from `MEMORY_HUB_PROXY_PUBLIC_URL` (when unset, the script detects it with `hostname -I` / macOS `ipconfig getifaddr en0`,
+falling back to `localhost`), injected into `metadata-instances.json.proxy_endpoint` in memory-hub.
+The Panel backend → Kernel forwarding is not affected by this variable (it always uses `REMOTE_INSTANCE_URL` → memory-core:8420).
+If the detected address is wrong (several network interfaces / public domain / a reverse proxy in front), set
+`MEMORY_HUB_PROXY_PUBLIC_URL=http://<actual-address>:8096` in `.env`. To make the UI card use the old behaviour (falling back to
+gateway_endpoint), set `MEMORY_HUB_PROXY_PUBLIC_URL` to an empty string.
 
-`proxy` 默认关闭 `auth` / `sessionInit` / `costGuard`（这些依赖内部服务），只做纯转发 + `tdai-memory` 上下文注入（injector 名称，非容器名）。要开启完整流水线，需要另行配置 —— 参见 `context_proxy/config.example.yaml`。
+`start-all.sh` turns on the proxy's full pipeline (auth + sessionInit + tdai memory injection) by default; set `PROXY_FULL_STACK=0` for plain forwarding. For the full set of proxy options, see `MemoryProxy/config.example.yaml`.
 
-## 常见问题
+## FAQ
 
-**Q: `./start-all.sh` 卡在 wait_healthy？**
-镜像可能还在拉取。用 `docker pull <IMAGE>` 手动预拉一次再跑脚本。
+**Q: `./start-all.sh` hangs in wait_healthy?**
+The image may still be downloading. Pull it once by hand with `docker pull <IMAGE>`, then rerun the script.
 
-**Q: memory-hub 起来但 Panel 打不开？**
+**Q: memory-hub is up but the panel won't open?**
 
-检查 `.env` 里 `KNOWLEDGE_PUBLIC_BASE_URL` 是不是含 `/v3` —— 缺 `/v3` panel 会报错。
+Check that `KNOWLEDGE_PUBLIC_BASE_URL` in `.env` includes `/v3` — without `/v3` the panel errors.
 
-**Q: proxy 转发返回 401？**
-`PROXY_UPSTREAM_API_KEY` 无效或 `PROXY_UPSTREAM_URL` 不匹配。用 `docker logs tdai-proxy` 看错误。
+**Q: the proxy returns 401 when forwarding?**
+`PROXY_UPSTREAM_API_KEY` is invalid or `PROXY_UPSTREAM_URL` is wrong. Check the error with `docker logs tdai-proxy`.
 
-**Q: 如何在容器外访问宿主机上其它服务（Ollama、Langfuse 等）？**
-脚本已默认 `--add-host=host.docker.internal:host-gateway`。容器内用 `http://host.docker.internal:<port>` 即可。
+**Q: how do containers reach other services on the host (Ollama, Langfuse, LiteLLM, etc.)?**
+The scripts already pass `--add-host=host.docker.internal:host-gateway`. Inside a container, use `http://host.docker.internal:<port>`.
