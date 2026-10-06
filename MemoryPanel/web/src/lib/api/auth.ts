@@ -23,7 +23,7 @@ export const authVerifyApi = {
 
 export interface AuthMethod {
   id: string;
-  type: 'user_key' | 'woa';
+  type: 'user_key' | 'woa' | 'oidc';
   display_name: string;
   enabled: boolean;
 }
@@ -68,6 +68,15 @@ export const authMethodsApi = {
     const params = new URLSearchParams({ instance_id: instanceId, return_to: returnTo });
     window.location.assign(`/api/v1/auth/idp/woa/login?${params.toString()}`);
   },
+  /** OIDC (e.g. Keycloak): full-page redirect to the IdP; it comes back to the panel signed in. */
+  loginOidc: (providerId: string, instanceId: string, returnTo = '/') => {
+    const params = new URLSearchParams({ instance_id: instanceId, return_to: returnTo });
+    window.location.assign(`/api/v1/auth/idp/${encodeURIComponent(providerId)}/login?${params.toString()}`);
+  },
+  /** Ends the panel's IdP session and the IdP's own session, then lands back on the login page. */
+  logoutIdp: () => {
+    window.location.assign('/api/v1/auth/idp/logout');
+  },
   session: (instanceId?: string) => {
     const query = instanceId ? `?instance_id=${encodeURIComponent(instanceId)}` : '';
     return request<{
@@ -84,6 +93,8 @@ export const authMethodsApi = {
         display_name?: string;
         login_name?: string;
         subject?: string;
+        provider_id?: string;
+        provider_type?: 'woa' | 'oidc';
       };
     }>('GET', `/api/v1/auth/session${query}`);
   },
@@ -103,6 +114,8 @@ export const authMethodsApi = {
     username?: string;
     userKey?: string;
     customUserKey?: string;
+    /** OIDC first login: create a new account with a generated key instead of linking one. */
+    createNew?: boolean;
   }) =>
     request<{
       authenticated: boolean;
@@ -122,6 +135,7 @@ export const authMethodsApi = {
         // 400 INVALID_USER_KEY，建号请求根本发不出去。
         user_key: input.userKey,
         custom_user_key: input.customUserKey,
+        create_new: input.createNew,
       },
     ),
   /**

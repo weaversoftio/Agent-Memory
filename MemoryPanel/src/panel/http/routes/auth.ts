@@ -7,6 +7,9 @@ const INSTANCE_QUERY = 'instance_id';
 const RETURN_QUERY = 'return_to';
 const PENDING_WOA_COOKIE = 'tdai_woa_pending';
 const PENDING_WOA_TTL_SECONDS = 300;
+/** Encrypted OIDC login state (state, nonce, PKCE verifier) between the redirect to the IdP and its callback. */
+const OIDC_STATE_COOKIE = 'tdai_oidc_state';
+const OIDC_STATE_TTL_SECONDS = 600;
 /**
  * 「本次改用 user_key 登录」的抑制 Cookie。
  *
@@ -32,6 +35,12 @@ function headersOf(c: { req: { raw: Request } }): Record<string, string | undefi
 function returnTo(value: string | undefined): string {
   if (!value || !value.startsWith('/') || value.startsWith('//')) return '/';
   return value;
+}
+
+/** Login page URL carrying an SSO failure code for the login screen to show. */
+function ssoErrorUrl(err: unknown): string {
+  const code = typeof err === 'string' ? err : err instanceof PanelAuthError ? err.code : 'OIDC_LOGIN_FAILED';
+  return `/?sso_error=${encodeURIComponent(code)}`;
 }
 
 function handleAuthError(c: Context, err: unknown): Response {
@@ -106,6 +115,8 @@ export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
           display_name: pending.identity.displayName,
           login_name: pending.identity.loginName,
           subject: pending.identity.subject,
+          provider_id: pending.identity.providerId,
+          provider_type: deps.auth.hasOidcProvider(pending.identity.providerId) ? 'oidc' : 'woa',
         },
       }, 200);
     }
@@ -207,12 +218,14 @@ export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
         username?: unknown;
         user_key?: unknown;
         custom_user_key?: unknown;
+        create_new?: unknown;
       };
       const result = await deps.auth.completePendingWoaLogin({
         token,
         username: typeof body.username === 'string' ? body.username : undefined,
         userKey: typeof body.user_key === 'string' ? body.user_key : undefined,
         customUserKey: typeof body.custom_user_key === 'string' ? body.custom_user_key : undefined,
+        createNew: body.create_new === true,
         requestId: c.get('reqId'),
       });
       c.header('Set-Cookie', buildExpiredSessionCookie(PENDING_WOA_COOKIE, deps.config.auth.sessionSecure));
@@ -285,6 +298,77 @@ export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
       return c.redirect(deps.auth.buildWoaLogoutUrl(returnTo(c.req.query(RETURN_QUERY))), 302);
     } catch (err) {
       return handleAuthError(c, err);
+    }
+  });
+
+  // ── OIDC (e.g. Keycloak) ─────────────────────────────────────────────
+  //
+  // Full-page browser navigations, so failures redirect to the login page with ?sso_error=CODE
+  // instead of answering JSON. A provider id that isn't an OIDC provider falls through, so
+  // these never shadow the WOA routes above.
+
+  // Logout for any IdP session: drop the panel session, then end the IdP session too.
+  api.get('/auth/idp/logout', async (c: Context) => {
+    const token = readCookie(c.req.header('cookie'), deps.config.auth.sessionCookieName);
+    const session = deps.auth.getSession(token);
+    deps.auth.destroySession(token);
+    c.header('Set-Cookie', buildExpiredSessionCookie(deps.config.auth.sessionCookieName, deps.config.auth.sessionSecure));
+    return c.redirect(await deps.auth.buildIdpLogoutUrl(session), 302);
+  });
+
+  api.get('/auth/idp/:provider/login', async (c: Context, next: Next) => {
+    const providerId = c.req.param('provider') ?? '';
+    if (!deps.auth.hasOidcProvider(providerId)) return next();
+    const instanceId = c.req.query(INSTANCE_QUERY) || deps.instanceRegistry.listAll()[0]?.instance_id;
+    if (!instanceId) return c.redirect(ssoErrorUrl('MISSING_INSTANCE_ID'), 302);
+    try {
+      const { url, stateToken } = await deps.auth.beginOidcLogin({
+        providerId,
+        instanceId,
+        returnTo: returnTo(c.req.query(RETURN_QUERY)),
+      });
+      c.header('Set-Cookie', buildSessionCookie(OIDC_STATE_COOKIE, stateToken, OIDC_STATE_TTL_SECONDS, deps.config.auth.sessionSecure));
+      return c.redirect(url, 302);
+    } catch (err) {
+      return c.redirect(ssoErrorUrl(err), 302);
+    }
+  });
+
+  api.get('/auth/idp/:provider/callback', async (c: Context, next: Next) => {
+    const providerId = c.req.param('provider') ?? '';
+    if (!deps.auth.hasOidcProvider(providerId)) return next();
+    const secure = deps.config.auth.sessionSecure;
+    c.header('Set-Cookie', buildExpiredSessionCookie(OIDC_STATE_COOKIE, secure));
+    // The IdP reports a refusal or failure as ?error=... (e.g. the user cancelled).
+    if (c.req.query('error')) {
+      deps.logger.warn('OIDC login refused by the identity provider', {
+        error: c.req.query('error'),
+        description: c.req.query('error_description'),
+      });
+      return c.redirect(ssoErrorUrl('OIDC_DENIED'), 302);
+    }
+    try {
+      const result = await deps.auth.completeOidcLogin({
+        providerId,
+        stateToken: readCookie(c.req.header('cookie'), OIDC_STATE_COOKIE),
+        state: c.req.query('state'),
+        code: c.req.query('code'),
+        requestId: c.get('reqId'),
+      });
+      if (result.kind === 'pending') {
+        c.header('Set-Cookie', buildSessionCookie(PENDING_WOA_COOKIE, result.pending.token, PENDING_WOA_TTL_SECONDS, secure), { append: true });
+        return c.redirect('/', 302);
+      }
+      c.header('Set-Cookie', buildSessionCookie(
+        deps.config.auth.sessionCookieName,
+        result.session.token,
+        deps.config.auth.sessionTtlSeconds,
+        secure,
+      ), { append: true });
+      c.header('Set-Cookie', buildExpiredSessionCookie(PENDING_WOA_COOKIE, secure), { append: true });
+      return c.redirect(result.returnTo, 302);
+    } catch (err) {
+      return c.redirect(ssoErrorUrl(err), 302);
     }
   });
 

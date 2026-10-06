@@ -16,7 +16,8 @@
  */
 import { create } from 'zustand';
 import { readAuth, clearAuth, resumeSession, type AuthState } from '@/components/LoginGate';
-import { onUnauthorized } from '@/lib/teamApi';
+import { authMethodsApi, onUnauthorized } from '@/lib/teamApi';
+import { getPanelSession } from '@/lib/panelSession';
 import { clearBackendCache, writeActiveTeamId } from '@/services';
 
 const PANEL_SESSION_KEY = 'tdai-panel.session';
@@ -47,7 +48,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
     clearBackendCache();
     // activeTeamId 可能指向旧用户才有权限的 team，清掉避免新用户登录后选了一个没权限的 team。
     writeActiveTeamId(null);
+    // SSO sessions live in an HttpOnly cookie: clearing local state alone would sign the user
+    // straight back in, so hand off to the backend, which also ends the IdP session.
+    const idp = getPanelSession()?.authMethod === 'idp';
     clearAuth();
+    if (idp) {
+      authMethodsApi.logoutIdp();
+      return;
+    }
     set({ auth: undefined });
   },
 

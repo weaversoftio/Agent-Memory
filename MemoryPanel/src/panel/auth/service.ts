@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Logger } from '../infra/logger.js';
 import type { PanelAuthConfig } from '../config/panel-config.js';
 import { InstanceRegistry } from '../config/instance-registry.js';
@@ -8,7 +8,8 @@ import { FileIdentityStore, decryptSecret, encryptSecret } from './identity-stor
 import { MemorySessionStore, type IdpSession, type SessionUser } from './session-store.js';
 import { AuthProviderRegistry } from './provider-registry.js';
 import { WoaProvider } from './woa-provider.js';
-import type { ExternalIdentity, HeaderInjectedProvider } from './types.js';
+import { OidcLoginError, OidcProvider } from './oidc-provider.js';
+import type { ExternalIdentity, HeaderInjectedProvider, RedirectOAuth2Provider } from './types.js';
 
 export class PanelAuthError extends Error {
   constructor(readonly code: string, message: string, readonly status = 401) {
@@ -19,9 +20,33 @@ export class PanelAuthError extends Error {
 
 export interface AuthMethodView {
   id: string;
-  type: 'user_key' | 'woa';
+  type: 'user_key' | 'woa' | 'oidc';
   display_name: string;
   enabled: boolean;
+}
+
+/** Outcome of an OIDC callback: a ready session, or a first login that still has to create or link an account. */
+export type OidcLoginResult =
+  | { kind: 'session'; session: IdpSession; returnTo: string }
+  | { kind: 'pending'; pending: PendingWoaLogin; returnTo: string };
+
+/** Encrypted into a short-lived cookie between the redirect to the IdP and its callback. */
+interface OidcStatePayload {
+  version: 1;
+  providerId: string;
+  instanceId: string;
+  returnTo: string;
+  state: string;
+  nonce: string;
+  codeVerifier: string;
+  expiresAt: number;
+}
+
+const OIDC_STATE_TTL_MS = 10 * 60 * 1000;
+
+/** Default username from an IdP login name: IdPs allow dots and @, core usernames don't. */
+function usernameFrom(loginName: string): string {
+  return loginName.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 export interface IdpLoginResult {
@@ -111,6 +136,7 @@ export class PanelAuthService {
   private readonly identities: FileIdentityStore;
   private readonly providers = new AuthProviderRegistry();
   private readonly consumedPendingWoa = new Set<string>();
+  private readonly teamIds = new Map<string, Promise<string>>();
 
   constructor(dependencies: PanelAuthDependencies) {
     const { config, instances, metaKernel, logger } = dependencies;
@@ -144,6 +170,27 @@ export class PanelAuthService {
         authProvider: config.woa.authProvider,
       }));
     }
+    if (config.idpEnabled && config.oidc.enabled) {
+      // A misconfigured IdP must not take the panel down: log it and keep key login working.
+      try {
+        if (!config.appUrl) throw new Error('PANEL_AUTH_APP_URL is required for OIDC login');
+        this.providers.register(new OidcProvider({
+          id: config.oidc.id,
+          displayName: config.oidc.displayName,
+          issuerUrl: config.oidc.issuerUrl,
+          internalIssuerUrl: config.oidc.internalIssuerUrl,
+          clientId: config.oidc.clientId,
+          clientSecret: config.oidc.clientSecret,
+          scopes: config.oidc.scopes,
+          usernameClaim: config.oidc.usernameClaim,
+          authProvider: config.oidc.authProvider,
+        }));
+      } catch (err) {
+        logger.error('OIDC login disabled: invalid configuration', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   listMethods(): AuthMethodView[] {
@@ -157,7 +204,145 @@ export class PanelAuthService {
     if (woa) {
       methods.push({ id: 'woa', type: 'woa', display_name: woa.displayName, enabled: true });
     }
+    for (const provider of this.providers.listByKind('redirect-oauth2')) {
+      methods.push({ id: provider.id, type: 'oidc', display_name: provider.displayName, enabled: true });
+    }
     return methods;
+  }
+
+  hasOidcProvider(providerId: string): boolean {
+    return this.providers.get(providerId)?.kind === 'redirect-oauth2';
+  }
+
+  /** Starts an OIDC login: the IdP URL to send the browser to, and the state to keep in a cookie until the callback. */
+  async beginOidcLogin(input: {
+    providerId: string;
+    instanceId: string;
+    returnTo: string;
+  }): Promise<{ url: string; stateToken: string }> {
+    const provider = this.requireOidc(input.providerId);
+    this.requireInstance(input.instanceId);
+    const state = randomBytes(24).toString('base64url');
+    const nonce = randomBytes(24).toString('base64url');
+    let prepared: { url: string; codeVerifier: string };
+    try {
+      prepared = await provider.prepareAuthorize({ state, nonce, redirectUri: this.oidcRedirectUri(provider.id) });
+    } catch (err) {
+      throw this.oidcError(err);
+    }
+    const payload: OidcStatePayload = {
+      version: 1,
+      providerId: provider.id,
+      instanceId: input.instanceId,
+      returnTo: this.safeReturnTo(input.returnTo),
+      state,
+      nonce,
+      codeVerifier: prepared.codeVerifier,
+      expiresAt: Date.now() + OIDC_STATE_TTL_MS,
+    };
+    return { url: prepared.url, stateToken: encryptSecret(JSON.stringify(payload), this.config.sessionSecret) };
+  }
+
+  /**
+   * Finishes an OIDC login. A linked identity gets a session straight away; a first login
+   * gets a pending token, and the user then creates an account or links an existing one.
+   */
+  async completeOidcLogin(input: {
+    providerId: string;
+    stateToken: string | undefined;
+    state: string | undefined;
+    code: string | undefined;
+    requestId?: string;
+  }): Promise<OidcLoginResult> {
+    const provider = this.requireOidc(input.providerId);
+    const saved = this.readOidcState(input.stateToken);
+    if (!saved || saved.providerId !== provider.id || !input.state || saved.state !== input.state) {
+      throw new PanelAuthError('OIDC_STATE_INVALID', 'login session expired or was started in another browser; try again', 401);
+    }
+    if (!input.code) throw new PanelAuthError('OIDC_CODE_MISSING', 'the identity provider returned no code', 401);
+    let result: { identity: ExternalIdentity; idToken: string };
+    try {
+      result = await provider.authenticateFromCallback({
+        code: input.code,
+        redirectUri: this.oidcRedirectUri(provider.id),
+        codeVerifier: saved.codeVerifier,
+        expectedNonce: saved.nonce,
+      });
+    } catch (err) {
+      throw this.oidcError(err);
+    }
+    const { identity, idToken } = result;
+    try {
+      const resolved = await this.resolveIdentity(saved.instanceId, identity, input.requestId);
+      const session = this.sessions.create({
+        instanceId: saved.instanceId,
+        coreUserId: resolved.coreUserId,
+        userKey: resolved.userKey,
+        providerId: identity.providerId,
+        externalSubject: identity.subject,
+        displayName: identity.displayName ?? identity.loginName,
+        user: resolved.user,
+        idToken,
+      });
+      return { kind: 'session', session, returnTo: saved.returnTo };
+    } catch (err) {
+      if (!(err instanceof PanelAuthError) || err.code !== 'IDENTITY_NOT_BOUND') throw err;
+      return { kind: 'pending', pending: this.createPendingToken(saved.instanceId, identity), returnTo: saved.returnTo };
+    }
+  }
+
+  /** Where to send the browser after the panel session is gone: the IdP's logout for OIDC sessions, else the panel. */
+  async buildIdpLogoutUrl(session: IdpSession | null): Promise<string> {
+    const home = `${this.config.appUrl}/`;
+    const provider = session ? this.providers.get(session.providerId) : null;
+    if (provider?.kind !== 'redirect-oauth2') return '/';
+    try {
+      return (await (provider as RedirectOAuth2Provider).buildLogoutUrl({ returnTo: home, idToken: session?.idToken })) ?? '/';
+    } catch (err) {
+      this.logger.warn('OIDC logout URL unavailable', { err: err instanceof Error ? err.message : String(err) });
+      return '/';
+    }
+  }
+
+  private readOidcState(token: string | undefined): OidcStatePayload | null {
+    if (!token) return null;
+    try {
+      const payload = JSON.parse(decryptSecret(token, this.config.sessionSecret)) as Partial<OidcStatePayload>;
+      if (
+        payload.version !== 1 ||
+        typeof payload.providerId !== 'string' ||
+        typeof payload.instanceId !== 'string' ||
+        typeof payload.state !== 'string' ||
+        typeof payload.nonce !== 'string' ||
+        typeof payload.codeVerifier !== 'string' ||
+        typeof payload.expiresAt !== 'number' ||
+        payload.expiresAt <= Date.now()
+      ) return null;
+      return { ...payload, returnTo: this.safeReturnTo(payload.returnTo ?? '/') } as OidcStatePayload;
+    } catch {
+      return null;
+    }
+  }
+
+  private oidcRedirectUri(providerId: string): string {
+    return `${this.config.appUrl}/api/v1/auth/idp/${encodeURIComponent(providerId)}/callback`;
+  }
+
+  private oidcError(err: unknown): PanelAuthError {
+    if (err instanceof PanelAuthError) return err;
+    const message = err instanceof Error ? err.message : String(err);
+    this.logger.warn('OIDC login failed', { err: message });
+    return err instanceof OidcLoginError
+      ? new PanelAuthError('OIDC_LOGIN_FAILED', message, 401)
+      : new PanelAuthError('OIDC_UNAVAILABLE', `identity provider unavailable: ${message}`, 502);
+  }
+
+  private requireOidc(providerId: string): RedirectOAuth2Provider {
+    const provider = this.providers.get(providerId);
+    if (provider?.kind !== 'redirect-oauth2') {
+      throw new PanelAuthError('AUTH_METHOD_DISABLED', `${providerId} login is disabled`, 404);
+    }
+    return provider as RedirectOAuth2Provider;
   }
 
   /**
@@ -211,11 +396,16 @@ export class PanelAuthService {
   }): Promise<PendingWoaLogin> {
     const identity = await this.requireWoa().authenticateFromHeaders(input.headers);
     if (!identity) throw new PanelAuthError('WOA_IDENTITY_INVALID', 'WOA identity headers are invalid', 401);
-    this.requireInstance(input.instanceId);
+    return this.createPendingToken(input.instanceId, identity);
+  }
+
+  /** First login of an external identity: an encrypted, 5-minute token the create/link screen completes. */
+  private createPendingToken(instanceId: string, identity: ExternalIdentity): PendingWoaLogin {
+    this.requireInstance(instanceId);
     const expiresAt = Date.now() + 5 * 60 * 1000;
     const payload: PendingWoaPayload = {
       version: 1,
-      instanceId: input.instanceId,
+      instanceId,
       identity: {
         providerId: identity.providerId,
         subject: identity.subject,
@@ -230,14 +420,10 @@ export class PanelAuthService {
       nonce: randomUUID(),
     };
     const token = encryptSecret(JSON.stringify(payload), this.config.sessionSecret);
-    return { token, instanceId: input.instanceId, identity, expiresAt };
+    return { token, instanceId, identity, expiresAt };
   }
 
   getPendingWoaLogin(token: string | undefined): PendingWoaLogin | null {
-    // WOA 关闭时"完全无感"：即使浏览器残留旧 pending Cookie，也不响应。
-    // 否则 /auth/session 会返回 pending=true，前端渲染 WOA 确认页 → 存在跳 WOA 按钮
-    // → 用户点击后 loginWoa() 整页跳到 WOA_LOGIN_URL，破坏"未开 WOA 应像开发前一样"。
-    if (!this.providers.get('woa')) return null;
     if (!token || this.consumedPendingWoa.has(token)) return null;
     try {
       const parsed = JSON.parse(decryptSecret(token, this.config.sessionSecret)) as unknown;
@@ -255,6 +441,9 @@ export class PanelAuthService {
         typeof identity.loginName !== 'string'
       ) return null;
       if (payload.expiresAt <= Date.now()) return null;
+      // A pending login whose provider is now disabled is ignored entirely; otherwise /auth/session
+      // would still report pending=true and render a confirmation screen for a login method that's off.
+      if (!this.providers.get(identity.providerId)) return null;
       return {
         token,
         instanceId: payload.instanceId,
@@ -333,17 +522,20 @@ export class PanelAuthService {
     username?: string;
     userKey?: string;
     customUserKey?: string;
+    /** OIDC only: create a new account with a generated key instead of linking one. */
+    createNew?: boolean;
     requestId?: string;
   }): Promise<IdpLoginResult> {
     const pending = this.getPendingWoaLogin(input.token);
     if (!pending) throw new PanelAuthError('WOA_LOGIN_EXPIRED', 'WOA login confirmation expired', 401);
 
-    // 外部认证首次登录：用户必须提供一把 user_key——
-    // - 系统内已存在 → 绑定到该存量账号（老数据完整保留）；
-    // - 不存在 → 用这把 key 新建账号。
-    // 用户应在提交前先调 previewPendingWoaLogin 看清这把 key 属于谁，再确认。
+    // First external login. WOA: the user always supplies a user_key, which links the
+    // existing account it belongs to or creates a new account with it. OIDC: either link an
+    // existing account by its key (an unknown key is an error, not a new account), or
+    // createNew, which creates an account with a generated key shown once.
+    const oidc = this.providers.get(pending.identity.providerId)?.kind === 'redirect-oauth2';
     const userKey = input.userKey?.trim() || input.customUserKey?.trim();
-    if (!userKey) {
+    if (!userKey && !(oidc && input.createNew)) {
       throw new PanelAuthError('INVALID_USER_KEY', 'user_key is required', 400);
     }
     const resolved = await this.provisionIdentity({
@@ -351,7 +543,8 @@ export class PanelAuthService {
       identity: pending.identity,
       requestId: input.requestId,
       username: input.username?.trim() || undefined,
-      customUserKey: userKey,
+      customUserKey: userKey || undefined,
+      linkOnly: oidc && !!userKey,
     });
     this.consumedPendingWoa.add(input.token);
     const session = this.sessions.create({
@@ -366,9 +559,9 @@ export class PanelAuthService {
     return {
       session,
       identity: pending.identity,
-      // key 由用户提供（无论绑定存量还是新建），无需回显。
-      userKeyDisplay: undefined,
-      userKeyAutogenerated: false,
+      // A key the user supplied needs no echo; a generated one is shown exactly once.
+      userKeyDisplay: userKey ? undefined : resolved.userKey,
+      userKeyAutogenerated: !userKey,
     };
   }
 
@@ -540,7 +733,7 @@ export class PanelAuthService {
 
     throw new PanelAuthError(
       'IDENTITY_NOT_BOUND',
-      'WOA identity is authenticated but has not been bound to a Memory user',
+      `${identity.providerId} identity is authenticated but has not been bound to a Memory user`,
       403,
     );
   }
@@ -573,13 +766,13 @@ export class PanelAuthService {
     //      不改 auth_provider"，仍保持建号时的 provider（通常是 local）。
     // 因此单一 provider 会漏掉另一类，需按 woa → 默认(local) 依次反查。
     // 不会误命中：未绑定外部身份的账号 external_id 兜底为 usr-xxx 格式，与工号数字不同。
-    const coreUserId = await this.lookupCoreUserByExternal(externalId, context);
+    const coreUserId = await this.lookupCoreUserByExternal(externalId, identity, context);
     if (!coreUserId) return null;
 
     // 为反查到的账号签发一把新 user_key（Core 不下发既有 key 明文）。
     const issued = await this.metaKernel.invoke(
       'user-key/create',
-      { user_id: coreUserId, name: 'woa-login' },
+      { user_id: coreUserId, name: `${identity.providerId}-login` },
       context,
     );
     if (issued?.code !== 0 || !issued.data || typeof issued.data !== 'object') {
@@ -618,12 +811,10 @@ export class PanelAuthService {
    */
   private async lookupCoreUserByExternal(
     externalId: string,
+    identity: ExternalIdentity,
     context: ReturnType<PanelAuthService['context']>,
   ): Promise<string | null> {
-    // 当前只挂 WOA 一个 Provider，直接用 requireWoa().authProviderDomain 与
-    // config.woa.authProvider 等价；接第二个 Provider 时，该 domain 应改为
-    // "本次处理的 identity 所属 Provider 的 domain"（沿调用链传入 identity.providerId）。
-    const providers: Array<string | undefined> = [this.requireWoa().authProviderDomain, undefined];
+    const providers: Array<string | undefined> = [this.domainOf(identity), undefined];
     const tried = new Set<string>();
     for (const provider of providers) {
       const dedupKey = provider ?? '__default__';
@@ -671,7 +862,7 @@ export class PanelAuthService {
     await this.metaKernel.invoke('user/bind-external', {
       user_id: coreUserId,
       external_id: externalAuthId,
-      auth_provider: this.requireWoa().authProviderDomain,
+      auth_provider: this.domainOf(identity),
       display_name: identity.displayName?.trim() || undefined,
     }, context);
   }
@@ -682,6 +873,8 @@ export class PanelAuthService {
     requestId?: string;
     username?: string;
     customUserKey?: string;
+    /** Only link the account customUserKey belongs to; never create one with that key. */
+    linkOnly?: boolean;
   }): Promise<{ coreUserId: string; userKey: string; user: SessionUser }> {
     const { instanceId, identity, requestId, customUserKey } = input;
     const entry = this.requireInstance(instanceId);
@@ -693,7 +886,7 @@ export class PanelAuthService {
     // WOA 建号：username 默认取 WOA 登录名（可在确认页修改），与 user_id 解耦。
     // user_id **不**使用登录名，交给内核按 admin「新建并绑定账号」同一套逻辑生成 usr-xxx，
     // 避免把外部身份标识写进主键（改名/重名/跨 IdP 冲突会直接破坏归属关系）。
-    const username = (input.username || identity.loginName || identity.subject).trim();
+    const username = (input.username || usernameFrom(identity.loginName || identity.subject)).trim();
     if (!/^[A-Za-z0-9_-]+$/.test(username)) {
       throw new PanelAuthError('INVALID_USERNAME', 'username must contain only letters, numbers, underscores, or hyphens', 400);
     }
@@ -726,6 +919,15 @@ export class PanelAuthService {
         const verified = await this.verifyCoreUser(instanceId, customUserKey, requestId);
         return { coreUserId: verified.user_id, userKey: customUserKey, user: verified.user };
       }
+      if (input.linkOnly) {
+        throw new PanelAuthError('USER_KEY_NOT_FOUND', 'no account uses this user_key', 404);
+      }
+    }
+
+    // Usernames aren't unique in core, so refuse a second account with a name already in use:
+    // that's almost always an existing user who should link their key instead.
+    if (await this.usernameTaken(username, context)) {
+      throw new PanelAuthError('USERNAME_TAKEN', `an account named "${username}" already exists`, 409);
     }
 
     // 与 admin「新建并绑定账号」一致：不传 user_id，由内核生成 usr-xxx；
@@ -737,7 +939,7 @@ export class PanelAuthService {
     // "已建号、未绑定"的孤儿账号。
     const identityFields = {
       external_id: this.externalAuthIdOf(identity) || undefined,
-      auth_provider: this.requireWoa().authProviderDomain,
+      auth_provider: this.domainOf(identity),
       display_name: identity.displayName?.trim() || undefined,
       ...(identity.email?.trim() ? { email: identity.email.trim() } : {}),
     };
@@ -763,16 +965,17 @@ export class PanelAuthService {
     // 新建的账号也要写外部认证关联，否则下次登录查不到、会被当成初次再让填一次 key。
     // 放在加团队之前：关联比加团队更基础，先确保身份链路完整。
     await this.bindExternalAuth(result.user_id, identity, context);
-    if (this.config.woa.defaultTeamId) {
+    const team = await this.defaultTeamFor(identity, entry, requestId);
+    if (team) {
       // team-member/add 需 system_admin。凭证与建号保持一致（实例 api_key），
       // 全程只用这一个来源，避免两套 admin 凭证。
       const added = await this.metaKernel.invoke('team-member/add', {
-        team_id: this.config.woa.defaultTeamId,
+        team_id: team.teamId,
         user_id: result.user_id,
-        role: this.config.woa.defaultRole,
+        role: team.role,
       }, context);
       if (added.code !== 0) {
-        throw new PanelAuthError('WOA_TEAM_PROVISION_FAILED', added.message || 'failed to add WOA user to team', 502);
+        throw new PanelAuthError('WOA_TEAM_PROVISION_FAILED', added.message || 'failed to add the new user to the default team', 502);
       }
     }
     this.identities.save({
@@ -792,6 +995,82 @@ export class PanelAuthService {
     });
     const verified = await this.verifyCoreUser(instanceId, result.default_user_key, requestId);
     return { coreUserId: result.user_id, userKey: result.default_user_key, user: verified.user };
+  }
+
+  /** core `meta_users.auth_provider` for an identity: its provider's domain. */
+  private domainOf(identity: ExternalIdentity): string {
+    const provider = this.providers.get(identity.providerId);
+    if (!provider) throw new PanelAuthError('AUTH_METHOD_DISABLED', `${identity.providerId} login is disabled`, 404);
+    return provider.authProviderDomain;
+  }
+
+  private async usernameTaken(username: string, context: MetaCallContext): Promise<boolean> {
+    const found = await this.metaKernel.invoke('user/list', { username, limit: 1 }, context);
+    if (found?.code !== 0) {
+      throw new PanelAuthError('USER_LOOKUP_FAILED', found?.message || 'failed to check the username', 502);
+    }
+    const items = (found.data as { items?: unknown[] } | null)?.items;
+    return Array.isArray(items) && items.length > 0;
+  }
+
+  /** The team a newly created account joins, if its provider configures one. */
+  private async defaultTeamFor(
+    identity: ExternalIdentity,
+    entry: ReturnType<InstanceRegistry['resolve']>,
+    requestId?: string,
+  ): Promise<{ teamId: string; role: string } | null> {
+    if (this.providers.get(identity.providerId)?.kind === 'redirect-oauth2') {
+      const name = this.config.oidc.defaultTeamName;
+      return name ? { teamId: await this.ensureTeam(entry, name, requestId), role: this.config.oidc.defaultRole } : null;
+    }
+    return this.config.woa.defaultTeamId
+      ? { teamId: this.config.woa.defaultTeamId, role: this.config.woa.defaultRole }
+      : null;
+  }
+
+  /** Finds the admin's team with this name, creating it (owned by the admin) on first use. */
+  private ensureTeam(
+    entry: ReturnType<InstanceRegistry['resolve']>,
+    name: string,
+    requestId?: string,
+  ): Promise<string> {
+    const cacheKey = `${entry.instance_id}/${name}`;
+    let teamId = this.teamIds.get(cacheKey);
+    if (!teamId) {
+      teamId = this.findOrCreateTeam(entry, name, requestId);
+      this.teamIds.set(cacheKey, teamId);
+      // A failure must not be cached: the next login retries.
+      teamId.catch(() => this.teamIds.delete(cacheKey));
+    }
+    return teamId;
+  }
+
+  private async findOrCreateTeam(
+    entry: ReturnType<InstanceRegistry['resolve']>,
+    name: string,
+    requestId?: string,
+  ): Promise<string> {
+    const context = this.context(entry, entry.api_key, requestId);
+    const listed = await this.metaKernel.invoke('team/list', { user_key: entry.api_key, name, limit: 100 }, context);
+    if (listed?.code !== 0) {
+      throw new PanelAuthError('DEFAULT_TEAM_LOOKUP_FAILED', listed?.message || 'failed to look up the default team', 502);
+    }
+    const items = ((listed.data as { items?: Array<{ team_id?: unknown; name?: unknown }> } | null)?.items) ?? [];
+    const existing = items.find((t) => t.name === name && typeof t.team_id === 'string');
+    if (existing) return existing.team_id as string;
+
+    const admin = await this.verifyCoreUser(entry.instance_id, entry.api_key, requestId);
+    const created = await this.metaKernel.invoke('team/create', {
+      name,
+      owner_user_id: admin.user_id,
+      description: 'Everyone who signs in with SSO',
+    }, context);
+    const teamId = (created?.data as { team_id?: unknown } | null)?.team_id;
+    if (created?.code !== 0 || typeof teamId !== 'string') {
+      throw new PanelAuthError('DEFAULT_TEAM_CREATE_FAILED', created?.message || 'failed to create the default team', 502);
+    }
+    this.logger.info('default SSO team created', { instanceId: entry.instance_id, name, teamId });
+    return teamId;
   }
 
   private saveIdentityBinding(

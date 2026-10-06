@@ -18,6 +18,8 @@ export interface IdpSession {
   externalSubject: string;
   displayName?: string;
   user?: SessionUser;
+  /** OIDC logins: the ID token, sent as id_token_hint so logout also ends the IdP session. */
+  idToken?: string;
   createdAt: number;
   expiresAt: number;
 }

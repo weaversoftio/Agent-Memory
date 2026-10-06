@@ -181,6 +181,40 @@
   text-align: center;
 }
 
+/* SSO sign-in button(s) above the user_key form, and the "or" line between login options. */
+._tdai-login-sso {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+._tdai-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: #94a3b8;
+}
+
+._tdai-login-divider::before,
+._tdai-login-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #e2e8f0;
+}
+
+.dark ._tdai-login-divider {
+  color: #64748b;
+}
+
+.dark ._tdai-login-divider::before,
+.dark ._tdai-login-divider::after {
+  border-top-color: #334155;
+}
+
 ._tdai-login-switch ._tdai-login-switch-link.tea-btn {
   height: auto;
   padding: 0;

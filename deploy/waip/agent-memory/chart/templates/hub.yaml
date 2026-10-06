@@ -84,6 +84,32 @@ spec:
                   name: {{ .Release.Name }}-secrets
                   key: git-auth-token
             {{- end }}
+            {{- if .Values.auth.oidc.enabled }}
+            # Panel SSO (OIDC, e.g. Keycloak). user_key login stays on: the admin signs in with it.
+            - name: PANEL_AUTH_MODE
+              value: user_key,oidc
+            - name: PANEL_AUTH_APP_URL
+              value: {{ required "auth.appUrl is required when auth.oidc.enabled" .Values.auth.appUrl | quote }}
+            - name: PANEL_AUTH_OIDC_ID
+              value: {{ .Values.auth.oidc.id | quote }}
+            - name: PANEL_AUTH_OIDC_DISPLAY_NAME
+              value: {{ .Values.auth.oidc.displayName | quote }}
+            - name: PANEL_AUTH_OIDC_ISSUER_URL
+              value: {{ required "auth.oidc.issuerUrl is required when auth.oidc.enabled" .Values.auth.oidc.issuerUrl | quote }}
+            - name: PANEL_AUTH_OIDC_INTERNAL_ISSUER_URL
+              value: {{ .Values.auth.oidc.internalIssuerUrl | quote }}
+            - name: PANEL_AUTH_OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientId | quote }}
+            - name: PANEL_AUTH_OIDC_CLIENT_SECRET_FILE
+              value: /var/run/secrets/agent-memory-oidc/client-secret
+            - name: PANEL_AUTH_OIDC_DEFAULT_TEAM
+              value: {{ .Values.auth.oidc.defaultTeam | quote }}
+            - name: PANEL_AUTH_OIDC_DEFAULT_ROLE
+              value: {{ .Values.auth.oidc.defaultRole | quote }}
+            # SSO identity links and the key that encrypts them must survive restarts (the root fs is read-only).
+            - name: PANEL_AUTH_IDENTITY_STORE_PATH
+              value: /data/knowledge/panel-auth/identities.json
+            {{- end }}
             - name: HOME
               value: /tmp
           readinessProbe:
@@ -103,6 +129,11 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.auth.oidc.enabled }}
+            - name: oidc
+              mountPath: /var/run/secrets/agent-memory-oidc
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -112,6 +143,17 @@ spec:
             secretName: {{ .Release.Name }}-secrets
         - name: tmp
           emptyDir: {}
+        {{- if .Values.auth.oidc.enabled }}
+        # Created outside the chart (never in git). optional: a missing Secret leaves SSO off
+        # (the panel logs why) instead of keeping the pod from starting.
+        - name: oidc
+          secret:
+            secretName: {{ .Values.auth.oidc.clientSecretName }}
+            optional: true
+            items:
+              - key: client-secret
+                path: client-secret
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

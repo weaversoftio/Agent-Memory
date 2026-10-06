@@ -24,6 +24,20 @@ gitAuth:
   username: x-token-auth     # Bitbucket repository / project / workspace access tokens
   token: ""                  # sensitive — supplied by the pipeline, never committed
 
+# Panel sign-in. user_key login always stays on (the admin signs in with it).
+auth:
+  appUrl: ""                 # https://<panel host>; required for SSO (redirect URI and logout return)
+  oidc:
+    enabled: false
+    id: keycloak             # IdP client redirect URI: <appUrl>/api/v1/auth/idp/<id>/callback
+    displayName: SSO         # login button: "Sign in with <displayName>"
+    issuerUrl: ""            # public realm URL, e.g. https://auth.example.com/realms/acme
+    internalIssuerUrl: ""    # in-cluster realm URL for server-side calls; empty = issuerUrl
+    clientId: agent-memory
+    clientSecretName: agent-memory-oidc   # existing Secret with key client-secret, never committed
+    defaultTeam: ""          # team new SSO accounts join (created on first use); empty = none
+    defaultRole: member
+
 storage:
   className: mayastor-1rep-wait
   coreSize: 2Gi

@@ -19,6 +19,17 @@ gitAuth:
   username: $GIT_AUTH_USERNAME
   token: "$GIT_AUTH_TOKEN"
 
+auth:
+  appUrl: https://$HTTPROUTE_HOSTNAME
+  oidc:
+    enabled: $SSO_ENABLED
+    displayName: "$SSO_DISPLAY_NAME"
+    issuerUrl: $SSO_ISSUER_URL
+    internalIssuerUrl: $SSO_INTERNAL_ISSUER_URL
+    clientId: $SSO_CLIENT_ID
+    clientSecretName: $SSO_CLIENT_SECRET_NAME
+    defaultTeam: $SSO_DEFAULT_TEAM
+
 storage:
   className: $STORAGE_CLASS
   coreSize: $CORE_STORAGE_SIZE

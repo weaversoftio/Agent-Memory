@@ -145,6 +145,52 @@ export interface PanelAuthConfig {
      */
     authProvider: string;
   };
+  /** Public base URL of the panel, e.g. https://agent-memory.example.com (OIDC redirect and logout return). */
+  appUrl: string;
+  oidc: PanelOidcConfig;
+}
+
+export interface PanelOidcConfig {
+  enabled: boolean;
+  /** Route segment and binding key: /api/v1/auth/idp/{id}/callback must be the IdP client's redirect URI. */
+  id: string;
+  displayName: string;
+  issuerUrl: string;
+  internalIssuerUrl: string;
+  clientId: string;
+  clientSecret: string;
+  scopes: string;
+  usernameClaim: string;
+  authProvider: string;
+  /** Team that accounts created through SSO join (created on first use); empty = none. */
+  defaultTeamName: string;
+  defaultRole: string;
+}
+
+function readSecretFile(path: string): string {
+  if (!path) return '';
+  try {
+    return readFileSync(path, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+function buildOidcConfig(enabled: boolean): PanelOidcConfig {
+  return {
+    enabled,
+    id: env('PANEL_AUTH_OIDC_ID', 'keycloak'),
+    displayName: env('PANEL_AUTH_OIDC_DISPLAY_NAME', 'SSO'),
+    issuerUrl: env('PANEL_AUTH_OIDC_ISSUER_URL', ''),
+    internalIssuerUrl: env('PANEL_AUTH_OIDC_INTERNAL_ISSUER_URL', ''),
+    clientId: env('PANEL_AUTH_OIDC_CLIENT_ID', ''),
+    clientSecret: env('PANEL_AUTH_OIDC_CLIENT_SECRET', '') || readSecretFile(env('PANEL_AUTH_OIDC_CLIENT_SECRET_FILE', '')),
+    scopes: env('PANEL_AUTH_OIDC_SCOPES', 'openid profile email'),
+    usernameClaim: env('PANEL_AUTH_OIDC_USERNAME_CLAIM', 'preferred_username'),
+    authProvider: env('PANEL_AUTH_OIDC_AUTH_PROVIDER', 'keycloak'),
+    defaultTeamName: env('PANEL_AUTH_OIDC_DEFAULT_TEAM', ''),
+    defaultRole: env('PANEL_AUTH_OIDC_DEFAULT_ROLE', 'member'),
+  };
 }
 
 function buildAuthConfig(): PanelAuthConfig {
@@ -160,7 +206,8 @@ function buildAuthConfig(): PanelAuthConfig {
   );
   let userKeyEnabled = modes.has('user_key');
   const woaEnabled = modes.has('woa');
-  const idpEnabled = woaEnabled || modes.has('idp');
+  const oidcEnabled = modes.has('oidc');
+  const idpEnabled = woaEnabled || oidcEnabled || modes.has('idp');
   // 配置健壮性：user_key 是零配置默认登录方式。
   // 若解析后既没有 user_key 也没有任何 IdP（例如 PANEL_AUTH_MODE 填了未识别值、
   // 或未来 legacy 变量被移除后漏配），退化为"启用 user_key"，
@@ -168,7 +215,7 @@ function buildAuthConfig(): PanelAuthConfig {
   if (!userKeyEnabled && !idpEnabled) {
     userKeyEnabled = true;
   }
-  const appUrl = envFirst(['PANEL_AUTH_WOA_APP_URL', 'PANEL_AUTH_IDP_WOA_APP_URL'], '');
+  const appUrl = envFirst(['PANEL_AUTH_APP_URL', 'PANEL_AUTH_WOA_APP_URL', 'PANEL_AUTH_IDP_WOA_APP_URL'], '');
   const identityStorePath = env('PANEL_AUTH_IDENTITY_STORE_PATH', './data/panel-auth-identities.json');
 
   return {
@@ -201,6 +248,8 @@ function buildAuthConfig(): PanelAuthConfig {
         'local',
       ),
     },
+    appUrl: appUrl.replace(/\/+$/, ''),
+    oidc: buildOidcConfig(oidcEnabled),
   };
 }
 

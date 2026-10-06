@@ -63,8 +63,6 @@ export interface AuthProvider {
    * 与 `external_id` 组成账号反查键；每个 Provider 有且仅有一个域。
    */
   readonly authProviderDomain: string;
-  buildLoginUrl(callbackUrl: string): string;
-  buildLogoutUrl(returnTo: string): string;
 }
 
 /**
@@ -77,32 +75,33 @@ export interface HeaderInjectedProvider extends AuthProvider {
   readonly kind: 'header-injected';
   /** ingress 中间件按此头名识别请求归属，如 'x-tai-identity'。**无内置默认**。 */
   readonly ingressHeaderName: string;
+  buildLoginUrl(callbackUrl: string): string;
+  buildLogoutUrl(returnTo: string): string;
   authenticateFromHeaders(
     headers: Record<string, string | undefined>,
   ): Promise<ExternalIdentity | null>;
 }
 
 /**
- * OAuth2 / OIDC 模式的 Provider（本 PR 尚未落地实现，接口先立位）。
- *
- * 特征：我方通过 `prepareAuthorize` 生成 authorize URL；用户浏览器回到 callback
- * 带 code + state 时，Service 侧调 `authenticateFromCallback` 换 token + userinfo。
- *
- * 参见 `MemoryPanel/docs/design/2026-09-07-auth-provider-abstraction.md` §六。
+ * OAuth2 / OIDC provider (e.g. Keycloak): the panel sends the browser to the IdP's
+ * authorize URL (`prepareAuthorize`); the IdP redirects back with a code, which
+ * `authenticateFromCallback` exchanges for tokens and turns into an `ExternalIdentity`.
  */
 export interface RedirectOAuth2Provider extends AuthProvider {
   readonly kind: 'redirect-oauth2';
   prepareAuthorize(input: {
     state: string;
     redirectUri: string;
-    nonce?: string;
-  }): Promise<{ url: string; codeVerifier?: string }>;
+    nonce: string;
+  }): Promise<{ url: string; codeVerifier: string }>;
   authenticateFromCallback(input: {
     code: string;
     redirectUri: string;
-    codeVerifier?: string;
-    expectedNonce?: string;
-  }): Promise<ExternalIdentity | null>;
+    codeVerifier: string;
+    expectedNonce: string;
+  }): Promise<{ identity: ExternalIdentity; idToken: string }>;
+  /** IdP logout URL that ends the IdP session too, or null when the IdP has none. */
+  buildLogoutUrl(input: { returnTo: string; idToken?: string }): Promise<string | null>;
 }
 
 export interface AuthRouteContext {
