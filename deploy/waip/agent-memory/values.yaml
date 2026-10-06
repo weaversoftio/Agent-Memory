@@ -29,6 +29,7 @@ auth:
     clientId: $SSO_CLIENT_ID
     clientSecretName: $SSO_CLIENT_SECRET_NAME
     defaultTeam: $SSO_DEFAULT_TEAM
+    defaultRole: member
 
 storage:
   className: $STORAGE_CLASS
