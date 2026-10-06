@@ -27,15 +27,15 @@ vars:
     required: true
   IMAGE_CORE:
     description: "memory-core image (immutable tag or digest)"
-    default: "zot.platform.weaversoft.io/apps/agent-memory-core:2026.08.25"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-core:77357c5"
     required: true
   IMAGE_HUB:
     description: "memory-hub image (immutable tag or digest)"
-    default: "zot.platform.weaversoft.io/apps/agent-memory-hub:2026.08.25"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-hub:77357c5"
     required: true
   IMAGE_PROXY:
     description: "memory-proxy image (immutable tag or digest)"
-    default: "zot.platform.weaversoft.io/apps/agent-memory-proxy:2026.08.25"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-proxy:77357c5"
     required: true
   LLM_BASE_URL:
     description: "OpenAI-compatible endpoint for memory extraction, wiki/codegraph and proxied agent traffic"
