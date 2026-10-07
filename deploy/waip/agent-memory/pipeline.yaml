@@ -27,7 +27,7 @@ vars:
     required: true
   IMAGE_CORE:
     description: "memory-core image (immutable tag or digest)"
-    default: "zot.platform.weaversoft.io/apps/agent-memory-core:77357c5"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-core:a912d5e"
     required: true
   IMAGE_HUB:
     description: "memory-hub image (immutable tag or digest)"
