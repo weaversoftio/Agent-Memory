@@ -65,9 +65,21 @@ The installer writes, at user level so it applies to every project, and keeps a 
 
 Remove it again with `-Uninstall` (`--uninstall`).
 
+## What gets saved
+
+Your memory is **loaded** at the start of every chat, everywhere. **Saving** your conversations (the raw history, L0) is up to you, per project:
+
+- **Off until you say yes.** In a project you haven't decided on, the agent asks you once: *"Should Agent Memory save our conversations in <project>?"* Your answer is kept on your agent in Agent Memory, so it follows you to other machines. Change it any time by telling the agent ("stop saving this project" / "save this project").
+- **A project** is the repo's git remote (e.g. `bitbucket.org/weaversoft/agent-memory`), or the folder if there's no remote. Any credentials in the remote URL are removed on your machine before it's sent.
+- **`#nomemory`** anywhere in a message: nothing more from that chat is saved. In Claude Code the pause is kept on your machine, so the rest of that chat isn't even sent.
+- **Bare acknowledgements** ("ok", "thanks", 👍) are never saved.
+- **Raw history is kept 30 days.** The facts extracted from it (L1 and up) stay.
+
+Facts the agent saves on purpose with `memory_add` are separate: they're saved whenever it decides to (or you ask), in any project.
+
 ## Check that it works
 
-1. Tell the agent something worth remembering, e.g. "our staging database is on port 5433".
+1. In a project you said yes to, tell the agent something worth remembering, e.g. "our staging database is on port 5433".
 2. In the panel → Chat Memory → your agent: the conversation shows up under **L0** right away, and extracted facts under **L1** after a few turns or 10 quiet minutes.
 3. Start a new chat and ask about it.
 
@@ -76,7 +88,7 @@ Remove it again with `-Uninstall` (`--uninstall`).
 ```
 Claude Code / Cursor ──(own login)──> its usual model
    ├─ MCP tools ──────────────┐  (the model decides)
-   └─ hooks ──────────────────┤  (every turn, always)
+   └─ hooks ──────────────────┤  (every turn, in projects you said yes to)
                               ▼
    WAIP MCP proxy (your WAIP token → signed X-WAIP-Identity) ──> memory-mcp  /mcp  /hooks/*
                               ▼
@@ -85,9 +97,9 @@ Claude Code / Cursor ──(own login)──> its usual model
 
 | Moment | Claude Code hook | Cursor hook | What happens |
 |---|---|---|---|
-| chat starts | `SessionStart` | `sessionStart` | profile + scenes (or recent facts) added to the chat |
-| you send a message | `UserPromptSubmit` | `beforeSubmitPrompt` | your message saved to L0 |
-| the agent finishes | `Stop` | `afterAgentResponse` | the reply saved to L0 |
+| chat starts | `SessionStart` | `sessionStart` | profile + scenes (or recent facts) added to the chat, plus this project's saving status (and the one-time question if undecided) |
+| you send a message | `UserPromptSubmit` | `beforeSubmitPrompt` | your message saved to L0, if saving is on and the chat isn't paused |
+| the agent finishes | `Stop` | `afterAgentResponse` | the reply saved to L0, same conditions |
 
 Saving runs in the background in Claude Code and never blocks a prompt in Cursor: if the memory server is down, you just keep working.
 

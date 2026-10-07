@@ -300,6 +300,8 @@ export class TdaiGateway {
   // ── Integrated services (Scanner + Worker) ──
   private stateBackend: IStateBackend | null = null;
   private timerScanner: TimerScanner | null = null;
+  /** Daily raw-history (L0) retention, when TDAI_L0_RETENTION_DAYS is set. */
+  private l0RetentionTimers: NodeJS.Timeout[] = [];
   private pipelineWorker: PipelineWorker | null = null;
   /**
    * 跨模块共享的并发信号量 —— memory PipelineWorker 用；skill 侧走
@@ -680,6 +682,8 @@ export class TdaiGateway {
       }
     }
 
+    this.startL0Retention();
+
     // ── Skill module post-wiring (after storage is set) ──
     // setStorage() above kicks off ensureSkillModuleWired() asynchronously
     // (B1 fix in tdai-core: concurrent triggers coalesce onto one promise);
@@ -810,6 +814,46 @@ export class TdaiGateway {
   /**
    * Gracefully stop the Gateway.
    */
+  /**
+   * Raw history (L0) retention: once a day, delete L0 messages older than
+   * TDAI_L0_RETENTION_DAYS (off when unset or 0; at least 3). Only L0 is touched: the facts,
+   * scenes and profile extracted from it (L1-L3) are kept. Extraction runs within minutes of
+   * a conversation going quiet, so anything this old has long been processed. Standalone
+   * (local store) only. The store refuses to delete more than 80% of L0 in one pass, as a
+   * guard against a mistyped setting.
+   */
+  private startL0Retention(): void {
+    const raw = process.env.TDAI_L0_RETENTION_DAYS?.trim();
+    const days = raw ? Number(raw) : 0;
+    if (!Number.isFinite(days) || days <= 0) return;
+    if (days < 3) {
+      this.logger.warn(`${TAG} L0 retention off: TDAI_L0_RETENTION_DAYS=${raw} is below the minimum of 3`);
+      return;
+    }
+    if (this.config.deployMode !== "standalone") {
+      this.logger.info(`${TAG} L0 retention off: only supported in standalone mode`);
+      return;
+    }
+    const run = async () => {
+      const store = this.core.getVectorStore();
+      if (!store) return;
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      try {
+        const removed = await store.deleteL0Expired(cutoff);
+        this.logger.info(`${TAG} L0 retention: removed ${removed} raw message(s) older than ${days} days (before ${cutoff})`);
+      } catch (err) {
+        this.logger.warn(`${TAG} L0 retention failed (will retry tomorrow): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    // First pass 10 minutes after start, then daily; neither keeps the process alive.
+    const first = setTimeout(() => void run(), 10 * 60 * 1000);
+    const daily = setInterval(() => void run(), 24 * 60 * 60 * 1000);
+    first.unref?.();
+    daily.unref?.();
+    this.l0RetentionTimers.push(first, daily);
+    this.logger.info(`${TAG} L0 retention on: raw history older than ${days} days is deleted daily`);
+  }
+
   async stop(): Promise<void> {
     // Idempotent: repeated calls (e.g. multiple SIGINT) share the same shutdown.
     if (this.stopPromise) {
@@ -821,6 +865,8 @@ export class TdaiGateway {
 
   private async doStop(): Promise<void> {
     this.logger.info("Shutting down gateway...");
+    for (const t of this.l0RetentionTimers) clearTimeout(t);
+    this.l0RetentionTimers = [];
 
     // 优雅关闭 OTel SDK（flush 剩余 Span/Log）
     try {

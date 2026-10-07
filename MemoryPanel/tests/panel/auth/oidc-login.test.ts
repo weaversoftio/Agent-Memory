@@ -272,7 +272,7 @@ async function signIn(user: IdpUser) {
 
 describe('OidcProvider', () => {
   it('sends the browser to the public issuer with PKCE S256, and calls the IdP in-cluster', async () => {
-    const provider = new OidcProvider({ ...authConfig('.').oidc, fetchImpl: idp.fetchImpl });
+    const provider = new OidcProvider({ ...authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))).oidc, fetchImpl: idp.fetchImpl });
     const { url, codeVerifier } = await provider.prepareAuthorize({ state: 's1', nonce: 'n1', redirectUri: `${APP_URL}/cb` });
     const parsed = new URL(url);
     expect(`${parsed.origin}${parsed.pathname}`).toBe(`${PUBLIC_ISSUER}/protocol/openid-connect/auth`);
@@ -283,7 +283,7 @@ describe('OidcProvider', () => {
   });
 
   it('refuses to start without its client secret', () => {
-    expect(() => new OidcProvider({ ...authConfig('.').oidc, clientSecret: '' })).toThrow(/CLIENT_SECRET/);
+    expect(() => new OidcProvider({ ...authConfig(mkdtempSync(join(tmpdir(), 'panel-oidc-'))).oidc, clientSecret: '' })).toThrow(/CLIENT_SECRET/);
   });
 });
 

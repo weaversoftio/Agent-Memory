@@ -51,6 +51,7 @@ storage:
 
 memory:
   promptMode: chat           # chat | code
+  l0RetentionDays: 30        # delete raw history (L0) older than this, daily; facts are kept. 0 = forever, min 3
 
 securityContext:
   uid: 10001

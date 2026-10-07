@@ -46,6 +46,9 @@ spec:
           env:
             - name: TDAI_GATEWAY_CONFIG
               value: /data/config/tdai-gateway.yaml
+            # Raw history (L0) older than this is deleted daily; facts (L1-L3) are kept. 0 = keep forever.
+            - name: TDAI_L0_RETENTION_DAYS
+              value: {{ .Values.memory.l0RetentionDays | default 0 | quote }}
             - name: TDAI_LLM_API_KEY
               valueFrom:
                 secretKeyRef:

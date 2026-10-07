@@ -34,6 +34,9 @@ auth:
     jwksUrl: $WAIP_IDENTITY_JWKS_URL
     audience: $WAIP_IDENTITY_AUDIENCE
 
+memory:
+  l0RetentionDays: $L0_RETENTION_DAYS
+
 storage:
   className: $STORAGE_CLASS
   coreSize: $CORE_STORAGE_SIZE

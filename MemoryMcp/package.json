@@ -1,6 +1,6 @@
 {
   "name": "@weaversoft/memory-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that lets coding agents (Claude Code, Cursor, Codex) read and write Agent Memory through Memory Hub",
   "type": "module",
   "private": true,

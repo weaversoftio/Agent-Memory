@@ -1,6 +1,6 @@
 {
   "name": "agent-memory",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Team memory for Claude Code: search, add, edit and delete memory through the memory MCP, save every turn to the agent's raw history (L0), and load the agent's profile and scenes at session start.",
   "author": {
     "name": "Weaversoft"

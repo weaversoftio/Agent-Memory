@@ -28,6 +28,7 @@ memory-mcp itself verifies nothing and trusts nothing in the header.
 | `memory_update` | Replace an L1 memory, an L2 scene or the L3 profile | `chat-memory/layer-update` |
 | `memory_delete` | Delete L1 memories or L0 messages/sessions | `chat-memory/layer-delete` |
 | `memory_save_conversation` | Save messages to L0; facts are extracted into L1 in the background | `chat-memory/import` |
+| `memory_project_saving` | Read or record whether the hooks save a project's conversations (asked once per project; off until the user agrees) | `meta/agent/get`, `meta/agent/update` (agent `metadata_json` → `memory_saving.projects`) |
 
 Edits and deletes only work on agents you own. Skills, wiki and code graph tools are planned next.
 
@@ -40,7 +41,7 @@ MCP tools only run when the model decides to call them. To save every turn and l
 | `POST /hooks/claude-code` | `SessionStart` (adds profile + scene index, or recent facts), `UserPromptSubmit` (saves the prompt to L0), `Stop` (saves `last_assistant_message` to L0) | Claude Code hook JSON |
 | `POST /hooks/cursor` | `sessionStart` (`additional_context`), `beforeSubmitPrompt` (saves `prompt`), `afterAgentResponse` (saves `text`) | Cursor hook JSON; `beforeSubmitPrompt` always answers `{"continue": true}` |
 
-Turns are saved to the session `claude-code-<session_id>` / `cursor-<conversation_id>`, split into ≤8000-character messages, with obvious secrets masked. Hooks always answer 200 so a memory problem never blocks the user. The ready-made client setup is in [`plugins/agent-memory`](../plugins/agent-memory/README.md): a Claude Code plugin and a Cursor installer.
+Turns are only saved in projects the user said yes to. A project is the client's `X-Memory-Project` header (its git remote; the plugin strips credentials) or else the hook input's `cwd` / Cursor `workspace_roots[0]`. In an undecided project the session-start context asks the agent to ask the user once and record the answer with `memory_project_saving`. A prompt containing `#nomemory` pauses saving for the rest of that chat (kept in memory here for a day; the Claude Code plugin also keeps a local flag), and bare acknowledgements ("ok", "thanks") are skipped. Saved turns go to the session `claude-code-<session_id>` / `cursor-<conversation_id>`, split into ≤8000-character messages, with obvious secrets masked. Hooks always answer 200 so a memory problem never blocks the user. The ready-made client setup is in [`plugins/agent-memory`](../plugins/agent-memory/README.md): a Claude Code plugin and a Cursor installer.
 
 ### Which agent's memory?
 

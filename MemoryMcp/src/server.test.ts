@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createHttpServer } from "./server.js";
 import { clearIdentityCache } from "./identity.js";
+import { clearProjectCache } from "./project.js";
 
 const KEY = "sk-mem-test-key";
 
@@ -17,6 +18,7 @@ interface Call {
 /** Fake Memory Hub: answers the panel endpoints the MCP uses and records every call. */
 function fakeHub(agents: Array<{ team_id: string; agent_id: string; name: string }>) {
   const calls: Call[] = [];
+  let agentMetadata = JSON.stringify({ owner_note: "keep me" });
   const teams = [...new Map(agents.map((a) => [a.team_id, { team_id: a.team_id, name: `Team ${a.team_id}` }])).values()];
   const ok = (data: unknown) => new Response(JSON.stringify({ code: 0, message: "ok", data }), { status: 200 });
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -31,6 +33,11 @@ function fakeHub(agents: Array<{ team_id: string; agent_id: string; name: string
         return ok({ items: teams });
       case "meta/agent/list":
         return ok({ items: agents.filter((a) => a.team_id === body.team_id).map((a) => ({ ...a, status: "active" })) });
+      case "meta/agent/get":
+        return ok({ agent_id: body.agent_id, metadata_json: agentMetadata });
+      case "meta/agent/update":
+        agentMetadata = body.metadata_json;
+        return ok({ agent_id: body.agent_id, metadata_json: agentMetadata });
       case "chat-memory/layer-add":
         return ok({ id: "m_1_abc", version: "v1", type: body.type });
       case "chat-memory/search":
@@ -52,7 +59,7 @@ function fakeHub(agents: Array<{ team_id: string; agent_id: string; name: string
         return new Response(JSON.stringify({ code: 404, message: "NOT_FOUND", data: null }), { status: 404 });
     }
   };
-  return { calls, fetchImpl };
+  return { calls, fetchImpl, metadata: () => JSON.parse(agentMetadata) };
 }
 
 let server: http.Server;
@@ -74,7 +81,10 @@ function textOf(result: unknown): string {
   return ((result as { content: Array<{ text: string }> }).content ?? []).map((c) => c.text).join("\n");
 }
 
-beforeEach(() => clearIdentityCache());
+beforeEach(() => {
+  clearIdentityCache();
+  clearProjectCache();
+});
 afterEach(async () => {
   await new Promise<void>((r) => server.close(() => r()));
 });
@@ -84,7 +94,7 @@ describe("memory MCP server", () => {
     const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
     await start(hub.fetchImpl);
     const client = await connect({});
-    expect((await client.listTools()).tools).toHaveLength(7);
+    expect((await client.listTools()).tools).toHaveLength(8);
     const result = await client.callTool({ name: "memory_whoami", arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Missing memory key");
@@ -100,6 +110,7 @@ describe("memory MCP server", () => {
       "memory_add",
       "memory_delete",
       "memory_list",
+      "memory_project_saving",
       "memory_save_conversation",
       "memory_search",
       "memory_update",
@@ -193,6 +204,32 @@ describe("memory MCP server", () => {
     const result = await client.callTool({ name: "memory_whoami", arguments: {} });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("not valid");
+    await client.close();
+  });
+
+  it("records the user's answer about saving a project, keeping the agent's other settings", async () => {
+    const hub = fakeHub([{ team_id: "team-a", agent_id: "agt-1", name: "builder" }]);
+    await start(hub.fetchImpl);
+    const client = await connect({ "x-memory-user-key": KEY });
+    const none = await client.callTool({ name: "memory_project_saving", arguments: {} });
+    expect(textOf(none)).toContain("off everywhere");
+
+    const on = await client.callTool({ name: "memory_project_saving", arguments: { project: "bitbucket.org/weaversoft/agent-memory", save: true } });
+    expect(textOf(on)).toContain("Saving is on for agent-memory");
+    await client.callTool({ name: "memory_project_saving", arguments: { project: "path:c:/notes", save: false } });
+
+    expect(hub.metadata()).toMatchObject({
+      owner_note: "keep me",
+      memory_saving: {
+        projects: {
+          "bitbucket.org/weaversoft/agent-memory": { save: true, name: "agent-memory" },
+          "path:c:/notes": { save: false, name: "notes" },
+        },
+      },
+    });
+    const listed = textOf(await client.callTool({ name: "memory_project_saving", arguments: {} }));
+    expect(listed).toContain("on   agent-memory");
+    expect(listed).toContain("off  notes");
     await client.close();
   });
 

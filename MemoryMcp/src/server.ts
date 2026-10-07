@@ -19,7 +19,7 @@ import { registerChatMemoryTools } from "./tools.js";
 import { handleHook, type HookClient } from "./hooks.js";
 
 export const SERVER_NAME = "agent-memory";
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_VERSION = "0.3.0";
 
 const INSTRUCTIONS =
   "Agent Memory: the team's shared long-term memory for this agent. Search it (memory_search) before answering questions about past decisions, conventions or project facts. When the user states a durable fact, decision or preference, save it with memory_add as one standalone sentence. Never save secrets or credentials.";
@@ -116,6 +116,7 @@ export function createHttpServer(config: McpConfig, fetchImpl?: typeof fetch): h
         hub,
         identityCacheMs: config.identityCacheMs,
         defaultTarget: { agentId: header(req, "x-memory-agent-id"), teamId: header(req, "x-memory-team-id") },
+        projectRemote: header(req, "x-memory-project"),
         log: (m) => console.warn(m),
       });
       return sendJson(res, 200, out);

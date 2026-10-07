@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HubClient, HubError } from "./hub.js";
 import { loadIdentity, resolveTarget, type Target, type TargetHint } from "./identity.js";
+import { getProjectSettings, setProjectSaving, NO_MEMORY_TAG } from "./project.js";
 
 export interface RequestContext {
   hub: HubClient;
@@ -294,6 +295,49 @@ export function registerChatMemoryTools(server: McpServer, ctx: RequestContext):
         return text(
           `Saved ${data.accepted_count} message(s) to L0 of ${where(t)} (session ${data.session_id}). Facts are extracted into L1 in the background.`,
         );
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "memory_project_saving",
+    {
+      title: "Turn saving of a project's conversations on or off",
+      description:
+        "Whether the hooks save this project's conversations (raw history, L0) to Agent Memory. Saving is off until the user agrees. Pass project (the key from the session-start memory note) and save=true/false to record the user's answer; pass only project to read it; pass nothing to list every project's setting. Only call with save after the user has answered.",
+      inputSchema: {
+        project: z
+          .string()
+          .max(300)
+          .optional()
+          .describe('Project key from the session-start note, e.g. "bitbucket.org/weaversoft/agent-memory".'),
+        save: z.boolean().optional().describe("The user's answer: true saves this project's conversations, false doesn't."),
+        ...targetArgs,
+      },
+    },
+    async (args) => {
+      try {
+        const t = await target(ctx, args);
+        if (args.project && typeof args.save === "boolean") {
+          const key = args.project.trim().toLowerCase();
+          const name = key.replace(/^path:/, "").split("/").pop() || key;
+          await setProjectSaving(ctx.hub, t, { key, name }, args.save);
+          return text(
+            args.save
+              ? `Saving is on for ${name}: its conversations are now saved to ${where(t)}. ${NO_MEMORY_TAG} in a message skips a single chat.`
+              : `Saving is off for ${name}: its conversations won't be saved. Memory is still loaded at the start of each session.`,
+          );
+        }
+        const projects = await getProjectSettings(ctx.hub, t);
+        if (args.project) {
+          const key = args.project.trim().toLowerCase();
+          const s = projects[key];
+          return text(s ? `Saving is ${s.save ? "on" : "off"} for ${s.name ?? key} (decided ${s.decided_at ?? "earlier"}).` : `Saving isn't decided for ${key} yet, so it's off.`);
+        }
+        const rows = Object.entries(projects).map(([key, s]) => `- ${s.save ? "on " : "off"}  ${s.name ?? key}  (${key})`);
+        return text(rows.length ? `Saving per project for ${where(t)}:\n${rows.join("\n")}` : "No project has been decided yet: saving is off everywhere.");
       } catch (err) {
         return failure(err);
       }

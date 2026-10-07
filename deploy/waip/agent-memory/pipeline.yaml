@@ -1,7 +1,7 @@
 description: "TencentDB Agent Memory — shared long-term memory, skills, wiki and code graph for coding agents. Panel (Memory Hub) plus an OpenAI/Anthropic-compatible proxy that agents point their base URL at; memory-core stays internal. SQLite on two PVCs, LLM via LiteLLM."
 
 app_name: "Agent Memory"
-version: "0.1.4"
+version: "0.1.5"
 has_ui: true
 
 # WARNING: never use the bash colon-dash or colon-question forms for any var
@@ -99,6 +99,10 @@ vars:
     description: "mcp:<name of the memory MCP's MCP store entry>"
     default: "mcp:memory-mcp"
     required: false
+  L0_RETENTION_DAYS:
+    description: "Days to keep raw conversation history (L0); facts extracted from it are kept. 0 = forever, minimum 3"
+    default: "30"
+    required: true
   STORAGE_CLASS:
     description: "StorageClass for the two data PVCs"
     default: "mayastor-1rep-wait"

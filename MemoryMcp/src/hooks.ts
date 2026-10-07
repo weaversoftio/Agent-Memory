@@ -6,11 +6,29 @@
  *   POST /hooks/cursor        body = Cursor hook input (sessionStart, beforeSubmitPrompt, afterAgentResponse)
  *
  * The client forwards its hook input unchanged (e.g. `curl --data-binary @-`) with the same
- * X-Memory-User-Key header the MCP uses, and gets back the JSON that client expects.
- * A hook must never break the user's session, so failures still answer 200 with a safe body.
+ * headers the MCP uses, plus X-Memory-Project (the repo's git remote), and gets back the JSON
+ * that client expects. A hook must never break the user's session, so failures still answer
+ * 200 with a safe body.
+ *
+ * What gets saved: only turns in projects the person said yes to (asked once per project;
+ * see project.ts), never a chat after "#nomemory", and never a bare "ok"/"thanks".
+ * Loading memory at session start happens everywhere.
  */
 import { HubClient } from "./hub.js";
 import { loadIdentity, resolveTarget, type Target, type TargetHint } from "./identity.js";
+import {
+  getProjectSettings,
+  isPaused,
+  isTrivial,
+  pauseSession,
+  projectFromPath,
+  projectFromRemote,
+  stateOf,
+  wantsNoMemory,
+  NO_MEMORY_TAG,
+  type ProjectRef,
+  type SavingState,
+} from "./project.js";
 
 export type HookClient = "claude-code" | "cursor";
 
@@ -18,6 +36,8 @@ export interface HookContext {
   hub: HubClient;
   identityCacheMs: number;
   defaultTarget: TargetHint;
+  /** The client's git remote for the project (X-Memory-Project), if it sent one. */
+  projectRemote?: string;
   log?: (msg: string) => void;
 }
 
@@ -91,10 +111,63 @@ async function readLayer(ctx: HookContext, t: Target, layer: "L1" | "L2" | "L3",
   return data.items ?? [];
 }
 
+function projectOf(ctx: HookContext, dir: string | undefined): ProjectRef | null {
+  return projectFromRemote(ctx.projectRemote) ?? projectFromPath(dir);
+}
+
+async function savingState(ctx: HookContext, project: ProjectRef | null): Promise<SavingState> {
+  return stateOf(await getProjectSettings(ctx.hub, await target(ctx)), project);
+}
+
+/** Saves one side of a turn if this project's saving is on and the chat isn't paused. */
+async function saveTurn(
+  ctx: HookContext,
+  session: string,
+  project: ProjectRef | null,
+  role: "user" | "assistant",
+  text: string | undefined,
+): Promise<void> {
+  if (isPaused(session)) return;
+  if (role === "user" && isTrivial(text)) return;
+  if (!(text ?? "").trim()) return;
+  if ((await savingState(ctx, project)) !== "on") return;
+  await saveMessage(ctx, session, role, text);
+}
+
+/** What the agent should know (and do) about saving this project's conversations. */
+function projectNote(project: ProjectRef | null, state: SavingState): string[] {
+  if (!project) return [];
+  if (state === "on") {
+    return [
+      "",
+      `## Saving: on for ${project.name}`,
+      `This project's conversations are saved to Agent Memory. To stop: the user says so (call memory_project_saving with project="${project.key}", save=false), or writes ${NO_MEMORY_TAG} in a message to skip just this chat.`,
+    ];
+  }
+  if (state === "off") {
+    return [
+      "",
+      `## Saving: off for ${project.name}`,
+      `This project's conversations are not saved (the user's choice). If they ask to save them, call memory_project_saving with project="${project.key}", save=true.`,
+    ];
+  }
+  return [
+    "",
+    `## Saving: not decided for ${project.name}`,
+    `Agent Memory doesn't save this project's conversations until the user agrees. Early in this session, at a natural point (not in the middle of a task), ask the user once:`,
+    `"Should Agent Memory save our conversations in ${project.name}? They become searchable memory for you and your agents. You can turn it off any time, and ${NO_MEMORY_TAG} in a message skips a single chat."`,
+    `Then call memory_project_saving with project="${project.key}" and save=true or save=false. If they decline, don't ask again.`,
+  ];
+}
+
 /** The memory summary added to a new session: L3 profile plus the L2 scene index (or recent L1 facts early on). */
-export async function buildSessionContext(ctx: HookContext): Promise<string> {
+export async function buildSessionContext(ctx: HookContext, project: ProjectRef | null = null): Promise<string> {
   const t = await target(ctx);
-  const [profile, scenes] = await Promise.all([readLayer(ctx, t, "L3", 1), readLayer(ctx, t, "L2", SCENES_MAX)]);
+  const [profile, scenes, projects] = await Promise.all([
+    readLayer(ctx, t, "L3", 1),
+    readLayer(ctx, t, "L2", SCENES_MAX),
+    getProjectSettings(ctx.hub, t),
+  ]);
 
   const lines = [`# Agent Memory: ${t.agentName} (team ${t.teamName})`];
   const profileText = profile[0]?.body?.trim();
@@ -115,9 +188,10 @@ export async function buildSessionContext(ctx: HookContext): Promise<string> {
       lines.push("", "## Recent facts");
       for (const f of facts) lines.push(`- ${(f.body ?? "").replace(/\s+/g, " ").slice(0, 240)}`);
     } else {
-      lines.push("", "Nothing is stored for this agent yet; this conversation is being saved so memory can build up.");
+      lines.push("", "Nothing is stored for this agent yet.");
     }
   }
+  lines.push(...projectNote(project, stateOf(projects, project)));
   lines.push(
     "",
     "Use memory_search before answering questions about past decisions, conventions or project facts. Save durable facts with memory_add. Never save secrets.",
@@ -128,6 +202,7 @@ export async function buildSessionContext(ctx: HookContext): Promise<string> {
 interface ClaudeCodeHookInput {
   hook_event_name?: string;
   session_id?: string;
+  cwd?: string;
   prompt?: string;
   last_assistant_message?: string;
   stop_hook_active?: boolean;
@@ -135,11 +210,14 @@ interface ClaudeCodeHookInput {
 
 interface CursorHookInput {
   hook_event_name?: string;
+  workspace_roots?: string[];
   conversation_id?: string;
   session_id?: string;
   prompt?: string;
   text?: string;
 }
+
+const PAUSED_NOTE = `Agent Memory: this chat is no longer saved (the user wrote ${NO_MEMORY_TAG}). Don't save anything from it with the memory tools either.`;
 
 /** Returns the JSON body to send back to the client. Never throws. */
 export async function handleHook(client: HookClient, input: unknown, ctx: HookContext): Promise<Record<string, unknown>> {
@@ -147,15 +225,20 @@ export async function handleHook(client: HookClient, input: unknown, ctx: HookCo
   if (client === "claude-code") {
     const h = (input ?? {}) as ClaudeCodeHookInput;
     const session = `claude-code-${h.session_id ?? "unknown"}`;
+    const project = projectOf(ctx, h.cwd);
     try {
       switch (h.hook_event_name) {
         case "SessionStart":
-          return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: await buildSessionContext(ctx) } };
+          return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: await buildSessionContext(ctx, project) } };
         case "UserPromptSubmit":
-          await saveMessage(ctx, session, "user", h.prompt);
+          if (wantsNoMemory(h.prompt)) {
+            pauseSession(session);
+            return { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: PAUSED_NOTE } };
+          }
+          await saveTurn(ctx, session, project, "user", h.prompt);
           return {};
         case "Stop":
-          await saveMessage(ctx, session, "assistant", h.last_assistant_message);
+          await saveTurn(ctx, session, project, "assistant", h.last_assistant_message);
           return {};
         default:
           return {};
@@ -168,15 +251,20 @@ export async function handleHook(client: HookClient, input: unknown, ctx: HookCo
 
   const h = (input ?? {}) as CursorHookInput;
   const session = `cursor-${h.conversation_id ?? h.session_id ?? "unknown"}`;
+  const project = projectOf(ctx, h.workspace_roots?.[0]);
   try {
     switch (h.hook_event_name) {
       case "sessionStart":
-        return { additional_context: await buildSessionContext(ctx) };
+        return { additional_context: await buildSessionContext(ctx, project) };
       case "beforeSubmitPrompt":
-        await saveMessage(ctx, session, "user", h.prompt);
+        if (wantsNoMemory(h.prompt)) {
+          pauseSession(session);
+          return { continue: true };
+        }
+        await saveTurn(ctx, session, project, "user", h.prompt);
         return { continue: true };
       case "afterAgentResponse":
-        await saveMessage(ctx, session, "assistant", h.text);
+        await saveTurn(ctx, session, project, "assistant", h.text);
         return {};
       default:
         return {};
