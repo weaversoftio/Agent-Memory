@@ -93,4 +93,4 @@ Saving runs in the background in Claude Code and never blocks a prompt in Cursor
 
 ## Local development
 
-Against the local Docker stack (`deploy/global-images` plus a `tdai-memory-mcp` container on port 8097), set the server URL to `http://localhost:8097`, leave the WAIP token empty and set your memory key. In Claude Code you can install from a checkout with `/plugin marketplace add <path to Agent-Memory>`; the Cursor installers take `-Url http://localhost:8097` (`--url`).
+Against the local Docker stack (`deploy/global-images` plus a `tdai-memory-mcp` container on port 8097), set the server URL to `http://localhost:8097`, enter `local` as the WAIP token (it is required but unused locally) and set your memory key. In Claude Code you can install from a checkout with `/plugin marketplace add <path to Agent-Memory>`; the Cursor installers take `-Url http://localhost:8097` (`--url`).
